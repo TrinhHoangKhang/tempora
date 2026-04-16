@@ -11,7 +11,7 @@ from genrec.dataset import AbstractDataset
 from genrec.tokenizer import AbstractTokenizer
 
 
-class RPGTokenizer(AbstractTokenizer):
+class RPG_optimizedTokenizer(AbstractTokenizer):
     """
     An example when "codebook_size == 256, n_codebooks == 32":
         0: padding
@@ -37,7 +37,7 @@ class RPGTokenizer(AbstractTokenizer):
         self.n_codebook_bits = self._get_codebook_bits(config['codebook_size'])
         self.index_factory = f'OPQ{config["n_codebook"]},IVF1,PQ{config["n_codebook"]}x{self.n_codebook_bits}'
 
-        super(RPGTokenizer, self).__init__(config, dataset)
+        super(RPG_optimizedTokenizer, self).__init__(config, dataset)
         self.item2id = dataset.item2id
         self.user2id = dataset.user2id
         self.id2item = dataset.id_mapping['id2item']
@@ -206,33 +206,52 @@ class RPGTokenizer(AbstractTokenizer):
 
         # ==================== NEW: Extract learned components ====================
         # CHANGE 1: Access the underlying OPQ + IVF structures
-        ivf_index = faiss.downcast_index(index.index)
+        # IndexPreTransform wraps the actual index, we need to get the index inside
+        index_to_unwrap = index
         
-        # CHANGE 2: Extract the learned ROTATION MATRIX from OPQ and convert to LINEAR LAYER
-        # The 'vt' member contains the rotation matrix (transposed)
-        # Shape: (embedding_dim, embedding_dim) e.g., (768, 768)
+        # Unwrap IndexPreTransform to get IndexIVFPQ
+        if isinstance(index_to_unwrap, faiss.IndexPreTransform):
+            vt_index = faiss.downcast_index(index_to_unwrap.index)
+        else:
+            vt_index = faiss.downcast_index(index_to_unwrap)
+        
+        # CHANGE 2: Extract the learned ROTATION MATRIX from OPQ pre-processor
         self.log(f'[TOKENIZER] Extracting learned rotation matrix from OPQ...')
-        rotation_matrix_np = faiss.vector_to_array(ivf_index.vt)  # shape (768, 768)
-        rotation_matrix_np = rotation_matrix_np.reshape(sent_embs.shape[1], sent_embs.shape[1])
+        
+        # The OPQ transformation info is in the VectorTransform chain
+        # Check if there's a LinearTransform that represents the OPQ rotation
+        if isinstance(index_to_unwrap, faiss.IndexPreTransform):
+            vt = index_to_unwrap.chain
+            # Try to get the rotation matrix from the transform chain
+            if vt.size() > 0:
+                linear_vt = faiss.downcast_VectorTransform(vt.at(0))
+                if hasattr(linear_vt, 'A'):
+                    rotation_matrix_np = faiss.vector_to_array(linear_vt.A)
+                    rotation_matrix_np = rotation_matrix_np.reshape(sent_embs.shape[1], sent_embs.shape[1])
+                else:
+                    rotation_matrix_np = np.eye(sent_embs.shape[1], dtype=np.float32)
+            else:
+                rotation_matrix_np = np.eye(sent_embs.shape[1], dtype=np.float32)
+        else:
+            rotation_matrix_np = np.eye(sent_embs.shape[1], dtype=np.float32)
+        
+        self.log(f'[TOKENIZER] Extracted rotation matrix shape: {rotation_matrix_np.shape}')
         
         # CHANGE 2b: Create a learnable linear layer initialized with the OPQ rotation matrix
-        # This allows the transformation to be fine-tuned during model training
         emb_dim = sent_embs.shape[1]
         linear_transform = nn.Linear(emb_dim, emb_dim)
         linear_transform.weight.data = torch.from_numpy(rotation_matrix_np).float()
-        linear_transform.bias.data.zero_()  # Initialize bias to zero
+        linear_transform.bias.data.zero_()
         self.log(f'[TOKENIZER] Created learnable linear layer: {linear_transform.weight.shape}')
         
         # CHANGE 3: Extract PQ CENTROIDS (the codebooks)
-        # The pq member of OPQ index contains the product quantizer
-        pq_index = ivf_index.pq
+        # For IndexIVFPQ, the pq member contains the product quantizer
+        pq_index = vt_index.pq
         
         # Get centroids: shape is (n_digit * codebook_size, dim_per_chunk)
-        # where dim_per_chunk = embedding_dim / n_digit
         pq_centroids_flat = faiss.vector_to_array(pq_index.centroids)
         
         # Reshape into (n_digit, codebook_size, dim_per_chunk)
-        # Example: (8192, 24) -> (32, 256, 24)
         dim_per_chunk = sent_embs.shape[1] // self.n_digit
         pq_centroids_np = pq_centroids_flat.reshape(self.n_digit, self.codebook_size, dim_per_chunk)
         
@@ -241,8 +260,7 @@ class RPGTokenizer(AbstractTokenizer):
         
         # ==================== Extract discrete codes (for backward compatibility) ====================
         # CHANGE 4: Keep the original code extraction for generating static semantic IDs
-        # These will be used for item2tokens during initialization
-        invlists = faiss.extract_index_ivf(ivf_index).invlists
+        invlists = faiss.extract_index_ivf(vt_index).invlists
         ls = invlists.list_size(0)
         pq_codes = faiss.rev_swig_ptr(invlists.get_codes(0), ls * invlists.code_size)
         pq_codes = pq_codes.reshape(-1, invlists.code_size)

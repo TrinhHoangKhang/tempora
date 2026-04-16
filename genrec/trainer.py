@@ -75,7 +75,23 @@ class Trainer:
                 total=len(train_dataloader),
                 desc=f"Training - [Epoch {epoch + 1}]",
             )
-            for batch in train_progress_bar:
+            for step, batch in enumerate(train_progress_bar):
+                # NEW: Temperature annealing for learnable quantization
+                if hasattr(self.model, 'temperature_annealing') and self.model.temperature_annealing:
+                    total_steps = n_epochs * len(train_dataloader)
+                    current_step = epoch * len(train_dataloader) + step
+                    progress = current_step / total_steps if total_steps > 0 else 0.0
+                    
+                    # Linear decay from 1.0 to min_quantizer_temperature
+                    self.model.quantizer_temperature = (
+                        1.0 * (1.0 - progress) + 
+                        self.model.min_quantizer_temperature * progress
+                    )
+                    
+                    # Log temperature every 100 steps
+                    if step % 100 == 0 and step > 0:
+                        self.log(f"[Epoch {epoch + 1}] Step {step}: quantizer_temperature = {self.model.quantizer_temperature:.6f}")
+                
                 optimizer.zero_grad()
                 outputs = self.model(batch)
                 loss = outputs.loss

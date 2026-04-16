@@ -25,7 +25,7 @@ class ResBlock(nn.Module):
         hidden_size (int): The size of the hidden layers in the block.
     """
 
-    def __init__(self, hidden_size):
+    def __init__(   self, hidden_size):
         super().__init__()
         self.linear = nn.Linear(hidden_size, hidden_size)
         # Initialize as an identity mapping
@@ -46,14 +46,14 @@ class ResBlock(nn.Module):
         return x + self.act(self.linear(x))
 
 
-class RPG(AbstractModel):
+class RPG_optimized(AbstractModel):
     def __init__(
         self,
         config: dict,
         dataset: AbstractDataset,
         tokenizer: AbstractTokenizer
     ):
-        super(RPG, self).__init__(config, dataset, tokenizer)
+        super(RPG_optimized, self).__init__(config, dataset, tokenizer)
 
         self.item_id2tokens = self._map_item_tokens().to(self.config['device'])
 
@@ -88,6 +88,12 @@ class RPG(AbstractModel):
         # The linear_transform can be fine-tuned during model training
         self._setup_learnable_quantizer()
 
+        # NEW: Learnable quantization configuration
+        self.use_gumbel_softmax = config.get('use_gumbel_softmax', False)
+        self.quantizer_temperature = config.get('quantizer_temperature', 1.0)
+        self.temperature_annealing = config.get('temperature_annealing', True)
+        self.min_quantizer_temperature = config.get('min_quantizer_temperature', 0.01)
+        
         # Graph-constrained decoding
         self.generate_w_decoding_graph = False
         self.init_flag = False
@@ -117,16 +123,110 @@ class RPG(AbstractModel):
             self.tokenizer.log(f'[MODEL] Created identity linear_transform (tokenizer did not provide one)')
         
         if hasattr(self.tokenizer, 'codebook_centroids') and self.tokenizer.codebook_centroids is not None:
-            # Register codebook_centroids as a buffer (non-trainable by default)
-            # Can be changed to parameter if needed for fine-tuning
-            self.register_buffer(
-                'codebook_centroids',
-                self.tokenizer.codebook_centroids.to(self.config['device'])
+            # Register codebook_centroids as trainable parameter (for joint optimization)
+            self.codebook_centroids = nn.Parameter(
+                self.tokenizer.codebook_centroids.to(self.config['device']),
+                requires_grad=True
             )
-            self.tokenizer.log(f'[MODEL] Loaded codebook_centroids from tokenizer: {self.codebook_centroids.shape}')
+            self.tokenizer.log(f'[MODEL] Loaded codebook_centroids from tokenizer as trainable parameter: {self.codebook_centroids.shape}')
         else:
             self.codebook_centroids = None
             self.tokenizer.log(f'[MODEL] No codebook_centroids available')
+    
+    def _gumbel_softmax_quantize(self, embeddings, temperature=1.0):
+        """
+        Quantize embeddings using Gumbel-Softmax over codebook centroids.
+        
+        Args:
+            embeddings: [B, seq_len, emb_dim] or [*, emb_dim]
+            temperature: Gumbel-Softmax temperature (higher = softer)
+        
+        Returns:
+            soft_codes: [B, seq_len, n_digit, codebook_size] soft probabilities
+        """
+        if self.codebook_centroids is None:
+            raise ValueError("Codebook centroids not available for Gumbel-Softmax quantization")
+        
+        *batch_dims, emb_dim = embeddings.shape
+        
+        # Reshape for computation
+        embeddings_flat = embeddings.reshape(-1, emb_dim)  # [B*seq_len, emb_dim]
+        
+        # Split embedding into chunks, one per digit
+        dim_per_chunk = emb_dim // self.tokenizer.n_digit
+        embeddings_chunked = embeddings_flat.reshape(-1, self.tokenizer.n_digit, dim_per_chunk)
+        # [B*seq_len, n_digit, dim_per_chunk]
+        
+        # Compute distances to centroids for each chunk
+        soft_codes_list = []
+        for d in range(self.tokenizer.n_digit):
+            # embeddings_chunked[:, d]: [B*seq_len, dim_per_chunk]
+            # codebook_centroids[d]: [codebook_size, dim_per_chunk]
+            
+            # Compute logits: negative squared distance to each centroid
+            distances = torch.cdist(
+                embeddings_chunked[:, d],           # [B*seq_len, dim_per_chunk]
+                self.codebook_centroids[d]          # [codebook_size, dim_per_chunk]
+            )  # [B*seq_len, codebook_size]
+            
+            # Use negative distance as logits (closer = higher logit)
+            logits = -distances  # [B*seq_len, codebook_size]
+            
+            # Apply Gumbel-Softmax
+            soft_code = F.gumbel_softmax(logits, tau=temperature, hard=False, dim=-1)
+            # [B*seq_len, codebook_size]
+            
+            soft_codes_list.append(soft_code)
+        
+        # Stack along n_digit dimension
+        soft_codes = torch.stack(soft_codes_list, dim=1)  # [B*seq_len, n_digit, codebook_size]
+        
+        # Reshape back to batch dimensions
+        soft_codes = soft_codes.reshape(*batch_dims, self.tokenizer.n_digit, self.tokenizer.codebook_size)
+        
+        return soft_codes
+    
+    def _decode_soft_codes(self, soft_codes):
+        """
+        Reconstruct embeddings from soft (continuous) codes using codebook centroids.
+        
+        Args:
+            soft_codes: [B, seq_len, n_digit, codebook_size]
+            
+        Returns:
+            embeddings: [B, seq_len, emb_dim]
+        """
+        if self.codebook_centroids is None:
+            raise ValueError("Codebook centroids not available for decoding soft codes")
+        
+        *batch_dims, n_digit_check, codebook_size_check = soft_codes.shape
+        
+        # Reshape for computation
+        soft_codes_flat = soft_codes.reshape(-1, n_digit_check, codebook_size_check)
+        # [B*seq_len, n_digit, codebook_size]
+        
+        dim_per_chunk = self.codebook_centroids.shape[-1]
+        reconstructed_chunks = []
+        
+        for d in range(self.tokenizer.n_digit):
+            # soft_codes_flat[:, d]: [B*seq_len, codebook_size]
+            # codebook_centroids[d]: [codebook_size, dim_per_chunk]
+            
+            # Weighted sum of centroids using soft probabilities
+            chunk = torch.matmul(
+                soft_codes_flat[:, d],              # [B*seq_len, codebook_size]
+                self.codebook_centroids[d]          # [codebook_size, dim_per_chunk]
+            )  # [B*seq_len, dim_per_chunk]
+            
+            reconstructed_chunks.append(chunk)
+        
+        # Concatenate all chunks back into full embedding
+        embeddings = torch.cat(reconstructed_chunks, dim=-1)  # [B*seq_len, emb_dim]
+        
+        # Reshape back to batch dimensions
+        embeddings = embeddings.reshape(*batch_dims, dim_per_chunk * self.tokenizer.n_digit)
+        
+        return embeddings
 
 
     def _map_item_tokens(self) -> torch.Tensor:
@@ -150,9 +250,44 @@ class RPG(AbstractModel):
                 f'#Non-embedding parameters: {total_params - emb_params}\n' \
                 f'#Total trainable parameters: {total_params}\n'
 
-    def forward(self, batch: dict, return_loss=True) -> torch.Tensor:
-        input_tokens = self.item_id2tokens[batch['input_ids']]
-        input_embs = self.gpt2.wte(input_tokens).mean(dim=-2)
+    def forward(self, batch: dict, return_loss=True, use_learnable_quantization=None) -> torch.Tensor:
+        """
+        Forward pass with optional learnable quantization.
+        
+        Args:
+            batch: Input batch with 'input_ids' and optionally 'labels'
+            return_loss: Whether to compute loss
+            use_learnable_quantization: If True, use Gumbel-Softmax quantization; 
+                                       if None, use self.use_gumbel_softmax
+        """
+        if use_learnable_quantization is None:
+            use_learnable_quantization = self.use_gumbel_softmax
+        
+        if use_learnable_quantization and self.linear_transform is not None and self.codebook_centroids is not None:
+            # ========== LEARNABLE QUANTIZATION PATH ==========
+            # This path requires item embeddings, which we reconstruct from discrete tokens
+            input_tokens = self.item_id2tokens[batch['input_ids']]  # [B, seq_len, n_digit]
+            
+            # Convert discrete tokens to continuous embeddings
+            token_embs = self.gpt2.wte(input_tokens).mean(dim=-2)  # [B, seq_len, emb_dim]
+            
+            # Apply learned rotation (pre-transform)
+            transformed_embs = self.linear_transform(token_embs)  # [B, seq_len, emb_dim]
+            
+            # Quantize with Gumbel-Softmax
+            soft_codes = self._gumbel_softmax_quantize(
+                transformed_embs,
+                temperature=self.quantizer_temperature
+            )  # [B, seq_len, n_digit, codebook_size]
+            
+            # Convert soft codes to embeddings
+            input_embs = self._decode_soft_codes(soft_codes)  # [B, seq_len, emb_dim]
+        else:
+            # ========== STATIC QUANTIZATION PATH (original) ==========
+            input_tokens = self.item_id2tokens[batch['input_ids']]
+            input_embs = self.gpt2.wte(input_tokens).mean(dim=-2)
+        
+        # Rest of forward pass is identical
         outputs = self.gpt2(
             inputs_embeds=input_embs,
             attention_mask=batch['attention_mask']
