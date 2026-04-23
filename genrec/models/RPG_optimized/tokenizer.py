@@ -13,6 +13,8 @@ from genrec.tokenizer import AbstractTokenizer
 
 class RPG_optimizedTokenizer(AbstractTokenizer):
     """
+    OPTIMIZED VERSION: Extracts learnable quantizer components (R and C) from OPQ.
+    
     An example when "codebook_size == 256, n_codebooks == 32":
         0: padding
         1-256: digit 1
@@ -29,9 +31,8 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         n_codebook_bits (int): The number of bits for the codebook.
         index_factory (str): The index factory name for the OPQ algorithm.
         item2tokens (dict): A dictionary mapping items to their semantic IDs.
-        base_user_id (int): The base user ID.
-        n_user_tokens (int): The number of user tokens.
-        eos_token (int): The end-of-sequence token.
+        linear_transform (nn.Linear): Learnable rotation matrix R from OPQ
+        codebook_centroids (torch.Tensor): Learnable codebook centroids C from OPQ
     """
     def __init__(self, config: dict, dataset: AbstractDataset):
         self.n_codebook_bits = self._get_codebook_bits(config['codebook_size'])
@@ -47,35 +48,22 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
 
     @property
     def n_digit(self):
-        """
-        Returns the number of digits for the tokenizer.
-
-        The number of digits is determined by the value of `rq_n_codebooks` in the configuration.
-        """
+        """Returns the number of digits for the tokenizer."""
         return self.config['n_codebook']
 
     @property
     def codebook_size(self):
-        """
-        Returns an integer representing the number of codebooks for the tokenizer.
-        """
+        """Returns the number of codebooks for the tokenizer."""
         return self.config['codebook_size']
 
     @property
     def max_token_seq_len(self) -> int:
-        """
-        Returns the maximum token sequence length, including the EOS token.
-
-        Returns:
-            int: The maximum token sequence length.
-        """
+        """Returns the maximum token sequence length, including the EOS token."""
         return self.config['max_item_seq_len']
 
     @property
     def vocab_size(self) -> int:
-        """
-        Returns the vocabulary size for the TIGER tokenizer.
-        """
+        """Returns the vocabulary size for the tokenizer."""
         return self.eos_token + 1
 
     def _get_codebook_bits(self, n_codebook):
@@ -84,18 +72,9 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         return int(x)
 
     def _encode_sent_emb(self, dataset: AbstractDataset, output_path: str):
-        """
-        Encodes the sentence embeddings for the given dataset and saves them to the specified output path.
-
-        Args:
-            dataset (AbstractDataset): The dataset containing the sentences to encode.
-            output_path (str): The path to save the encoded sentence embeddings.
-
-        Returns:
-            numpy.ndarray: The encoded sentence embeddings.
-        """
+        """Encodes the sentence embeddings for the given dataset and saves them to the specified output path."""
         assert self.config['metadata'] == 'sentence', \
-            'TIGERTokenizer only supports sentence metadata.'
+            'RPG_optimizedTokenizer only supports sentence metadata.'
 
         meta_sentences = [] # 1-base, meta_sentences[0] -> item_id = 1
         for i in range(1, dataset.n_items):
@@ -152,15 +131,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         return sent_embs
 
     def _get_items_for_training(self, dataset: AbstractDataset) -> np.ndarray:
-        """
-        Get a boolean mask indicating which items are used for training.
-
-        Args:
-            dataset (AbstractDataset): The dataset containing the item sequences.
-
-        Returns:
-            np.ndarray: A boolean mask indicating which items are used for training.
-        """
+        """Get a boolean mask indicating which items are used for training."""
         items_for_training = set()
         for item_seq in dataset.split_data['train']['item_seq']:
             for item in item_seq:
@@ -172,9 +143,19 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         return mask
 
     def _generate_semantic_id_opq(self, sent_embs, sem_ids_path, train_mask):
+        """
+        Generates semantic IDs using the OPQ algorithm.
+        OPTIMIZED: Extracts and returns the learned rotation matrix R and centroids C.
+
+        Args:
+            sent_embs (numpy.ndarray): Array of sentence embeddings.
+            sem_ids_path (str): Path to save the generated semantic IDs.
+            train_mask (numpy.ndarray): Boolean mask indicating the training samples.
+            
+        Returns:
+            (nn.Linear, torch.Tensor, dict): rotation matrix R (as nn.Linear), centroids C, and semantic IDs
+        """
         import faiss
-        import torch
-        
         if self.config['opq_use_gpu']:
             res = faiss.StandardGpuResources()
             res.setTempMemory(1024 * 1024 * 512)
@@ -184,7 +165,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         
         # Step 1: Create FAISS index with OPQ + PQ structure
         index = faiss.index_factory(
-            sent_embs.shape[1], #shape: (n_item-1, emb_dim)
+            sent_embs.shape[1],
             self.index_factory,
             faiss.METRIC_INNER_PRODUCT
         )
@@ -193,9 +174,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         if self.config['opq_use_gpu']:
             index = faiss.index_cpu_to_gpu(res, self.config['opq_gpu_id'], index, co)
         
-        # Step 2: Train FAISS - this learns:
-        #   - Rotation matrix R (part of OPQ)
-        #   - PQ centroids (one codebook per chunk)
+        # Step 2: Train FAISS - this learns R and C
         index.train(sent_embs[train_mask])
         
         # Step 3: Quantize all embeddings using learned R and centroids
@@ -204,9 +183,8 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         if self.config['opq_use_gpu']:
             index = faiss.index_gpu_to_cpu(index)
 
-        # ==================== NEW: Extract learned components ====================
+        # ==================== OPTIMIZED: Extract learned components ====================
         # CHANGE 1: Access the underlying OPQ + IVF structures
-        # IndexPreTransform wraps the actual index, we need to get the index inside
         index_to_unwrap = index
         
         # Unwrap IndexPreTransform to get IndexIVFPQ
@@ -218,11 +196,8 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         # CHANGE 2: Extract the learned ROTATION MATRIX from OPQ pre-processor
         self.log(f'[TOKENIZER] Extracting learned rotation matrix from OPQ...')
         
-        # The OPQ transformation info is in the VectorTransform chain
-        # Check if there's a LinearTransform that represents the OPQ rotation
         if isinstance(index_to_unwrap, faiss.IndexPreTransform):
             vt = index_to_unwrap.chain
-            # Try to get the rotation matrix from the transform chain
             if vt.size() > 0:
                 linear_vt = faiss.downcast_VectorTransform(vt.at(0))
                 if hasattr(linear_vt, 'A'):
@@ -245,7 +220,6 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         self.log(f'[TOKENIZER] Created learnable linear layer: {linear_transform.weight.shape}')
         
         # CHANGE 3: Extract PQ CENTROIDS (the codebooks)
-        # For IndexIVFPQ, the pq member contains the product quantizer
         pq_index = vt_index.pq
         
         # Get centroids: shape is (n_digit * codebook_size, dim_per_chunk)
@@ -255,17 +229,14 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         dim_per_chunk = sent_embs.shape[1] // self.n_digit
         pq_centroids_np = pq_centroids_flat.reshape(self.n_digit, self.codebook_size, dim_per_chunk)
         
-        self.log(f'[TOKENIZER] Extracted linear transformation layer: {linear_transform.weight.shape}')
         self.log(f'[TOKENIZER] Extracted PQ centroids: {pq_centroids_np.shape}')
         
         # ==================== Extract discrete codes (for backward compatibility) ====================
-        # CHANGE 4: Keep the original code extraction for generating static semantic IDs
         invlists = faiss.extract_index_ivf(vt_index).invlists
         ls = invlists.list_size(0)
         pq_codes = faiss.rev_swig_ptr(invlists.get_codes(0), ls * invlists.code_size)
         pq_codes = pq_codes.reshape(-1, invlists.code_size)
 
-        # Decode bitstrings to discrete code indices
         faiss_sem_ids = []
         n_bytes = pq_codes.shape[1]
         for u8code in pq_codes:
@@ -276,7 +247,6 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
             faiss_sem_ids.append(code)
         pq_codes = np.array(faiss_sem_ids)
 
-        # Save discrete semantic IDs to JSON
         item2sem_ids = {}
         for i in range(pq_codes.shape[0]):
             item = self.id2item[i + 1]
@@ -285,22 +255,13 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         with open(sem_ids_path, 'w') as f:
             json.dump(item2sem_ids, f)
         
-        # ==================== CHANGE 5: Return learned components as torch tensors ====================
-        # Convert numpy arrays and linear layer to torch tensors for use in model
+        # ==================== OPTIMIZED: Return learned components ====================
         codebook_centroids_torch = torch.from_numpy(pq_centroids_np).float()
         
         return linear_transform, codebook_centroids_torch, item2sem_ids
 
     def _sem_ids_to_tokens(self, item2sem_ids: dict) -> dict:
-        """
-        Converts semantic IDs to tokens.
-
-        Args:
-            item2sem_ids (dict): A dictionary mapping items to their corresponding semantic IDs.
-
-        Returns:
-            dict: A dictionary mapping items to their corresponding tokens.
-        """
+        """Converts semantic IDs to tokens."""
         for item in item2sem_ids:
             tokens = list(item2sem_ids[item])
             for digit in range(self.n_digit):
@@ -308,44 +269,12 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
                 tokens[digit] += self.codebook_size * digit + 1
             item2sem_ids[item] = tuple(tokens)
         return item2sem_ids
-    
-    def _save_learnable_quantizer(self, dataset: AbstractDataset):
-        """
-        NEW METHOD: Save learned linear transformation layer and codebook centroids to disk.
-        
-        CHANGE: This enables the model to load pre-trained quantizer components
-        without re-training FAISS every time the tokenizer is initialized.
-        The linear layer can now be fine-tuned during model training.
-        
-        Args:
-            dataset (AbstractDataset): The dataset object.
-        """
-        # Check if we have learned components to save
-        if self.linear_transform is None or self.codebook_centroids is None:
-            self.log('[TOKENIZER] No learnable quantizer to save (linear_transform or codebook_centroids is None)')
-            return
-        
-        # Create save path
-        quantizer_path = os.path.join(
-            dataset.cache_dir, 'processed',
-            f'learnable_quantizer_{os.path.basename(self.config["sent_emb_model"])}.pt'
-        )
-        
-        # Save linear transformation layer and codebook centroids
-        # Note: linear_transform is an nn.Linear module, so we save its state_dict
-        torch.save({
-            'linear_transform_weight': self.linear_transform.weight,
-            'linear_transform_bias': self.linear_transform.bias,
-            'codebook_centroids': self.codebook_centroids,
-        }, quantizer_path)
-        
-        self.log(f'[TOKENIZER] Saved learnable quantizer to {quantizer_path}')
 
     def _init_tokenizer(self, dataset: AbstractDataset):
         """
         Initialize the tokenizer.
         
-        CHANGE: Now stores learned linear transformation layer and codebook centroids as instance
+        OPTIMIZED: Stores learned linear transformation layer and codebook centroids as instance
         attributes so they can be accessed by the model for learnable quantization.
 
         Args:
@@ -357,7 +286,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         # Load semantic IDs
         sem_ids_path = os.path.join(
             dataset.cache_dir, 'processed',
-            f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.json'
+            f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.sem_ids'
         )
 
         if not os.path.exists(sem_ids_path):
@@ -383,42 +312,21 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
             # Generate semantic IDs
             training_item_mask = self._get_items_for_training(dataset)
             
-            # CHANGE: _generate_semantic_id_opq now returns linear_transform, codebook_centroids, and item2sem_ids
+            # OPTIMIZED: _generate_semantic_id_opq now returns linear_transform, codebook_centroids, and item2sem_ids
             linear_transform, codebook_centroids, item2sem_ids = \
                 self._generate_semantic_id_opq(sent_embs, sem_ids_path, training_item_mask)
             
-            # CHANGE: Store learned components for access by model
+            # OPTIMIZED: Store learned components for access by model
             self.linear_transform = linear_transform
             self.codebook_centroids = codebook_centroids
             
-            # Log the shapes for debugging
             self.log(f'[TOKENIZER] Stored linear_transform: {self.linear_transform.weight.shape}')
             self.log(f'[TOKENIZER] Stored codebook_centroids: {self.codebook_centroids.shape}')
         else:
-            # CHANGE: Load learned components from saved file if it exists
-            quantizer_path = os.path.join(
-                dataset.cache_dir, 'processed',
-                f'learnable_quantizer_{os.path.basename(self.config["sent_emb_model"])}.pt'
-            )
-            
-            if os.path.exists(quantizer_path):
-                self.log(f'[TOKENIZER] Loading learnable quantizer from {quantizer_path}...')
-                quantizer_state = torch.load(quantizer_path)
-                
-                # Reconstruct the linear layer from saved weights
-                emb_dim = quantizer_state['linear_transform_weight'].shape[0]
-                self.linear_transform = nn.Linear(emb_dim, emb_dim)
-                self.linear_transform.weight.data = quantizer_state['linear_transform_weight']
-                self.linear_transform.bias.data = quantizer_state['linear_transform_bias']
-                self.codebook_centroids = quantizer_state['codebook_centroids']
-                
-                self.log(f'[TOKENIZER] Loaded linear_transform: {self.linear_transform.weight.shape}')
-                self.log(f'[TOKENIZER] Loaded codebook_centroids: {self.codebook_centroids.shape}')
-            else:
-                # Initialize as None if not available (backward compatibility)
-                self.linear_transform = None
-                self.codebook_centroids = None
-                self.log(f'[TOKENIZER] No learnable quantizer found, using static tokenization')
+            # Initialize as None if semantic IDs already exist (backward compatibility)
+            self.linear_transform = None
+            self.codebook_centroids = None
+            self.log(f'[TOKENIZER] No learnable quantizer found, using static tokenization')
 
         self.log(f'[TOKENIZER] Loading semantic IDs from {sem_ids_path}...')
         item2sem_ids = json.load(open(sem_ids_path, 'r'))
@@ -427,16 +335,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         return item2tokens
 
     def _tokenize_first_n_items(self, item_seq: list) -> tuple:
-        """
-        Tokenizes the first n items in the given item_seq.
-        The losses for the first n items can be computed by only forwarding once.
-
-        Args:
-            item_seq (list): The item sequence that contains the first n items.
-
-        Returns:
-            tuple: A tuple containing the tokenized input_ids, attention_mask, labels, and seq_lens.
-        """
+        """Tokenizes the first n items in the given item_seq."""
         input_ids = [self.item2id[item] for item in item_seq[:-1]]
         seq_lens = len(input_ids)
         attention_mask = [1] * seq_lens
@@ -451,16 +350,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         return input_ids, attention_mask, labels, seq_lens
 
     def _tokenize_later_items(self, item_seq: list, pad_labels: bool = True) -> tuple:
-        """
-        Tokenizes the later items in the item sequence.
-        Only the last one items are used as the target item.
-
-        Args:
-            item_seq (list): The item sequence.
-
-        Returns:
-            tuple: A tuple containing the tokenized input IDs, attention mask, labels, and seq_lens.
-        """
+        """Tokenizes the later items in the item sequence."""
         input_ids = [self.item2id[item] for item in item_seq[:-1]]
         seq_lens = len(input_ids)
         attention_mask = [1] * seq_lens
@@ -476,16 +366,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
         return input_ids, attention_mask, labels, seq_lens
 
     def tokenize_function(self, example: dict, split: str) -> dict:
-        """
-        Tokenizes the input example based on the specified split.
-
-        Args:
-            example (dict): The input example containing the item sequence.
-            split (str): The split type ('train' or 'val' or 'test').
-
-        Returns:
-            dict: A dictionary containing the tokenized input, attention mask, and labels.
-        """
+        """Tokenizes the input example based on the specified split."""
         max_item_seq_len = self.config['max_item_seq_len']
         item_seq = example['item_seq'][0]
         if split == 'train':
@@ -493,7 +374,6 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
 
             # Tokenize the first n items if len(item_seq) <= max_item_seq_len + 1
             input_ids, attention_mask, labels, seq_lens = self._tokenize_first_n_items(
-                # Add 1 as the target item is not included in the input sequence
                 item_seq=item_seq[:min(len(item_seq), max_item_seq_len + 1)]
             )
             all_input_ids, all_attention_mask, all_labels, all_seq_lens = \
@@ -527,15 +407,7 @@ class RPG_optimizedTokenizer(AbstractTokenizer):
             }
 
     def tokenize(self, datasets: dict) -> dict:
-        """
-        Tokenizes the given datasets.
-
-        Args:
-            datasets (dict): A dictionary of datasets to tokenize.
-
-        Returns:
-            dict: A dictionary of tokenized datasets.
-        """
+        """Tokenizes the given datasets."""
         tokenized_datasets = {}
         for split in datasets:
             tokenized_datasets[split] = datasets[split].map(

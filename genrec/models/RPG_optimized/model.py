@@ -1,9 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,7 +19,7 @@ class ResBlock(nn.Module):
         hidden_size (int): The size of the hidden layers in the block.
     """
 
-    def __init__(   self, hidden_size):
+    def __init__(self, hidden_size):
         super().__init__()
         self.linear = nn.Linear(hidden_size, hidden_size)
         # Initialize as an identity mapping
@@ -47,6 +41,13 @@ class ResBlock(nn.Module):
 
 
 class RPG_optimized(AbstractModel):
+    """
+    OPTIMIZED VERSION: Learnable quantization with Gumbel-Softmax.
+    
+    This variant extracts the rotation matrix R and codebook centroids C from OPQ
+    and makes them trainable, enabling co-optimization of quantization and the model.
+    """
+    
     def __init__(
         self,
         config: dict,
@@ -84,11 +85,10 @@ class RPG_optimized(AbstractModel):
         self.temperature = self.config['temperature']
         self.loss_fct = torch.nn.CrossEntropyLoss(ignore_index=tokenizer.ignored_label)
 
-        # NEW: Add learnable quantizer components from tokenizer
-        # The linear_transform can be fine-tuned during model training
+        # OPTIMIZED: Add learnable quantizer components from tokenizer
         self._setup_learnable_quantizer()
 
-        # NEW: Learnable quantization configuration
+        # OPTIMIZED: Learnable quantization configuration
         self.use_gumbel_softmax = config.get('use_gumbel_softmax', False)
         self.quantizer_temperature = config.get('quantizer_temperature', 1.0)
         self.temperature_annealing = config.get('temperature_annealing', True)
@@ -104,11 +104,11 @@ class RPG_optimized(AbstractModel):
 
     def _setup_learnable_quantizer(self):
         """
-        NEW METHOD: Set up learnable quantizer components from tokenizer.
+        Set up learnable quantizer components from tokenizer.
         
         This includes:
-        - linear_transform: A learnable linear layer (initialized from OPQ rotation matrix)
-        - codebook_centroids: The PQ codebook centroids (can be optionally tuned)
+        - linear_transform: A learnable linear layer (initialized from OPQ rotation matrix R)
+        - codebook_centroids: The PQ codebook centroids C (trainable)
         """
         if hasattr(self.tokenizer, 'linear_transform') and self.tokenizer.linear_transform is not None:
             # Copy the linear layer to model and register as a module parameter
@@ -132,6 +132,27 @@ class RPG_optimized(AbstractModel):
         else:
             self.codebook_centroids = None
             self.tokenizer.log(f'[MODEL] No codebook_centroids available')
+
+        self.model_emb_dim = self.config['n_embd']
+        self.quantizer_emb_dim = self.linear_transform.in_features
+
+        self.pre_quantizer_proj = None
+        self.post_quantizer_proj = None
+        if self.model_emb_dim != self.quantizer_emb_dim:
+            self.pre_quantizer_proj = nn.Linear(
+                self.model_emb_dim,
+                self.quantizer_emb_dim
+            ).to(self.config['device'])
+            self.post_quantizer_proj = nn.Linear(
+                self.quantizer_emb_dim,
+                self.model_emb_dim
+            ).to(self.config['device'])
+            self.tokenizer.log(
+                f'[MODEL] Added quantizer adapters: '
+                f'{self.model_emb_dim} -> {self.quantizer_emb_dim} -> {self.model_emb_dim}'
+            )
+        else:
+            self.tokenizer.log(f'[MODEL] Quantizer dim matches model dim: {self.model_emb_dim}')
     
     def _gumbel_softmax_quantize(self, embeddings, temperature=1.0):
         """
@@ -265,14 +286,20 @@ class RPG_optimized(AbstractModel):
         
         if use_learnable_quantization and self.linear_transform is not None and self.codebook_centroids is not None:
             # ========== LEARNABLE QUANTIZATION PATH ==========
-            # This path requires item embeddings, which we reconstruct from discrete tokens
+            # This path uses learned components for quantization
             input_tokens = self.item_id2tokens[batch['input_ids']]  # [B, seq_len, n_digit]
             
             # Convert discrete tokens to continuous embeddings
             token_embs = self.gpt2.wte(input_tokens).mean(dim=-2)  # [B, seq_len, emb_dim]
             
+            # Optional projection to quantizer space (handles n_embd != OPQ/PCA dim)
+            if self.pre_quantizer_proj is not None:
+                token_embs_for_quantizer = self.pre_quantizer_proj(token_embs)
+            else:
+                token_embs_for_quantizer = token_embs
+
             # Apply learned rotation (pre-transform)
-            transformed_embs = self.linear_transform(token_embs)  # [B, seq_len, emb_dim]
+            transformed_embs = self.linear_transform(token_embs_for_quantizer)
             
             # Quantize with Gumbel-Softmax
             soft_codes = self._gumbel_softmax_quantize(
@@ -281,7 +308,11 @@ class RPG_optimized(AbstractModel):
             )  # [B, seq_len, n_digit, codebook_size]
             
             # Convert soft codes to embeddings
-            input_embs = self._decode_soft_codes(soft_codes)  # [B, seq_len, emb_dim]
+            input_embs = self._decode_soft_codes(soft_codes)
+
+            # Project back to GPT embedding space if needed
+            if self.post_quantizer_proj is not None:
+                input_embs = self.post_quantizer_proj(input_embs)
         else:
             # ========== STATIC QUANTIZATION PATH (original) ==========
             input_tokens = self.item_id2tokens[batch['input_ids']]
@@ -478,4 +509,4 @@ class RPG_optimized(AbstractModel):
                 index=(self.item_id2tokens[1:,:] - 1).unsqueeze(0).expand(token_logits.shape[0], -1, -1)  # (batch_size, n_items, code_dim)
             ).mean(dim=-1)
             preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
-            return preds
+            return preds.unsqueeze(-1)

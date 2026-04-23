@@ -1,33 +1,15 @@
 # Overwritting configs
 metadata: sentence
 
-# Training and Evaluation
-train_batch_size: 256
-eval_batch_size: 32
-epochs: 150
-eval_interval: 1        # Evaluate every n epochs
-patience: 20            # Early stopping patience (None to disable)
-
-# Optimizer and Learning Rate
-lr: 0.0003
-weight_decay: 0.0
-warmup_steps: 10000
-max_grad_norm: 1.0      # None for no clipping
-
-# Evaluation Metrics
-topk: [5, 10, 50]
-metrics: [ndcg, recall]
-val_metric: ndcg@10
-
 # Config the sentence embedding model
 #   Sentence T5
-sent_emb_model: sentence-transformers/sentence-t5-base
-sent_emb_dim: 768
-sent_emb_pca: 128
+# sent_emb_model: sentence-transformers/sentence-t5-base
+# sent_emb_dim: 768
+# sent_emb_pca: 128
 #   OpenAI Embedding Model
-#sent_emb_model: text-embedding-3-large
-#sent_emb_dim: 3072
-#sent_emb_pca: 512
+sent_emb_model: text-embedding-3-large
+sent_emb_dim: 3072
+sent_emb_pca: 512
 openai_api_key: ~
 
 sent_emb_batch_size: 512
@@ -61,3 +43,9 @@ propagation_steps: 3
 #   decoding graph construction
 chunk_size: 1024
 num_workers: 64
+
+# OPTIMIZED: Gumbel-Softmax learnable quantization configs
+use_gumbel_softmax: True
+quantizer_temperature: 1.0
+temperature_annealing: True
+min_quantizer_temperature: 0.01
