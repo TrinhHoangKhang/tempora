@@ -625,47 +625,52 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 6: Loss Computation ============
         if return_loss:
-            # Extract labels
+            # Extract labels and create mask for valid positions (not padding)
             labels = batch['labels']
+            label_mask = labels.view(-1) != self.tokenizer.ignored_label
             
-            # Create mask for valid positions (not padding)
-            valid_mask = (labels != self.tokenizer.ignored_label)
+            # Reshape final_states for loss computation
+            # final_states: (batch, seq_len, n_digit, n_embd) → (batch*seq_len, n_digit, n_embd)
+            final_states_flat = final_states.view(-1, self.n_pred_head, self.config['n_embd'])
             
-            # Compute loss for each digit separately
-            total_loss = 0.0
-            for digit_idx in range(self.n_pred_head):
-                # Extract predictions and labels for this digit
-                # final_states: (batch, seq_len, n_digit, n_embd)
-                # Extract digit_idx: (batch, seq_len, n_embd)
-                digit_preds = final_states[:, :, digit_idx, :]
-                
-                # Get label tokens for this digit
-                # item_id2tokens[label]: (batch, seq_len, n_digit)
-                # Extract digit_idx: (batch, seq_len)
-                label_tokens = self.item_id2tokens[labels][:, :, digit_idx]
-                
-                # Reshape for loss computation
-                batch_size, seq_len = labels.shape
-                digit_preds_flat = digit_preds[valid_mask]  # (valid_count, n_embd)
-                label_tokens_flat = label_tokens[valid_mask]  # (valid_count,)
-                
-                # Normalize predictions (L2 norm) and compute logits
-                digit_preds_normalized = F.normalize(digit_preds_flat, dim=-1)
-                
-                # Compute logits: similarity with embedding table
-                # Extract embeddings for this digit's tokens
-                digit_start = digit_idx * self.tokenizer.codebook_size
-                digit_end = (digit_idx + 1) * self.tokenizer.codebook_size
-                digit_embeddings = self.gpt2.wte.weight[digit_start:digit_end]
-                
-                # Logits: (valid_count, codebook_size)
-                logits = torch.matmul(digit_preds_normalized, digit_embeddings.T) / self.temperature
-                
-                # Cross-entropy loss
-                digit_loss = self.loss_fct(logits, label_tokens_flat)
-                total_loss = total_loss + digit_loss
+            # Select valid positions only
+            # (batch*seq_len, n_digit, n_embd) → (valid_count, n_digit, n_embd)
+            selected_states = final_states_flat[label_mask]
             
-            outputs.loss = total_loss / self.n_pred_head
+            # Normalize predictions
+            selected_states = F.normalize(selected_states, dim=-1)
+            
+            # Split into chunks for each digit
+            # (valid_count, n_digit, n_embd) → n_digit tensors of (valid_count, n_embd)
+            selected_states = torch.chunk(selected_states, self.n_pred_head, dim=1)
+            
+            # Get token embeddings for all digits
+            token_emb = self.gpt2.wte.weight[1:-1]  # Exclude padding and EOS
+            token_emb = F.normalize(token_emb, dim=-1)
+            
+            # Split embeddings into chunks for each digit
+            # (n_digit*codebook_size, n_embd) → n_digit tensors of (codebook_size, n_embd)
+            token_embs = torch.chunk(token_emb, self.n_pred_head, dim=0)
+            
+            # Compute logits for each digit
+            token_logits = [
+                torch.matmul(selected_states[i].squeeze(dim=1), token_embs[i].T) / self.temperature
+                for i in range(self.n_pred_head)
+            ]
+            
+            # Get label tokens for valid positions only
+            # item_id2tokens[labels]: (batch*seq_len, n_digit)
+            token_labels = self.item_id2tokens[labels.view(-1)[label_mask]]  # (valid_count, n_digit)
+            
+            # Compute loss for each digit
+            # Note: token_labels are stored as absolute indices (1-256, 257-512, etc.)
+            # We need to convert to relative indices (0-255 for each digit)
+            losses = [
+                self.loss_fct(token_logits[i], token_labels[:, i] - i * self.config['codebook_size'] - 1)
+                for i in range(self.n_pred_head)
+            ]
+            
+            outputs.loss = torch.mean(torch.stack(losses))
         
         return outputs
 
