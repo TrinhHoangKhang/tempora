@@ -485,6 +485,10 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 2: Initialize Differentiable OPQ (if enabled) ============
         if use_differentiable_opq:
+            # Validate required config keys
+            if 'sent_emb_dim' not in config:
+                raise ValueError("Config must include 'sent_emb_dim' for DifferentiableOPQ")
+            
             if hasattr(tokenizer, 'opq_rotation') and hasattr(tokenizer, 'pq_codebooks') and \
                tokenizer.opq_rotation is not None and tokenizer.pq_codebooks is not None:
                 self.dopq = DifferentiableOPQ(
@@ -493,7 +497,7 @@ class RPGUpgrade(AbstractModel):
                     codebook_size=tokenizer.codebook_size,
                     rotation_matrix=tokenizer.opq_rotation.to(self.config['device']),
                     codebook_matrices=tokenizer.pq_codebooks.to(self.config['device']),
-                    temperature=config.get('gumbel_temperature', 1.0)
+                    temperature=config.get('quantizer_temperature', 1.0)
                 ).to(self.config['device'])
                 self.log(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
             else:
@@ -501,7 +505,7 @@ class RPGUpgrade(AbstractModel):
                     embedding_dim=config['sent_emb_dim'],
                     n_codebook=tokenizer.n_digit,
                     codebook_size=tokenizer.codebook_size,
-                    temperature=config.get('gumbel_temperature', 1.0)
+                    temperature=config.get('quantizer_temperature', 1.0)
                 ).to(self.config['device'])
                 self.log(f"[MODEL] DifferentiableOPQ initialized with random parameters")
         else:
@@ -743,12 +747,31 @@ class RPGUpgrade(AbstractModel):
         self.init_flag = True
 
     def graph_propagation(self, token_logits, n_return_sequences):
-        """Graph-constrained beam search decoding."""
-        # Placeholder for graph propagation logic
-        # This would implement constrained beam search using the similarity graph
-        return token_logits
+        """Graph-constrained beam search decoding.
+        
+        TODO: Implement constrained beam search using the similarity graph.
+        Can follow the pattern from original RPG model for reference.
+        
+        Args:
+            token_logits: Log probabilities for each digit
+            n_return_sequences: Number of sequences to return
+            
+        Returns:
+            Top-k predicted items with constrained decoding
+        """
+        raise NotImplementedError("Graph propagation not yet implemented for RPGUpgrade")
 
     def generate(self, batch, n_return_sequences=1):
-        """Generate next items given a user's history."""
-        # Placeholder for generation logic
-        pass
+        """Generate next items given a user's history.
+        
+        TODO: Implement constrained beam search generation.
+        Can follow the pattern from original RPG model for reference.
+        
+        Args:
+            batch: Input batch with 'input_ids', 'attention_mask', 'seq_lens'
+            n_return_sequences: Number of sequences to generate per user
+            
+        Returns:
+            Predicted item IDs for next position
+        """
+        raise NotImplementedError("Generation not yet fully implemented for RPGUpgrade")
