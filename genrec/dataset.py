@@ -1,85 +1,13 @@
-import logging
+from logging import getLogger
 from datasets import Dataset
 
 
 class AbstractDataset:
-    """
-    Abstract base class for all datasets in this framework.
-
-    ─────────────────────────────────────────────────────────────────────────
-    WHAT THIS CLASS DOES
-    ─────────────────────────────────────────────────────────────────────────
-    This class defines the shared skeleton that every dataset must follow.
-    It handles splitting logic and exposes standard statistics. The only thing
-    a subclass needs to do is implement `_download_and_process_raw()`, which
-    must populate two attributes:
-    
-        self.all_item_seqs  (dict)  
-        self.id_mapping     (dict) 
-        self.item2meta      (dict)  
-        
-    ─────────────────────────────────────────────────────────────────────────
-    ABOUT `_download_and_process_raw()`
-    ─────────────────────────────────────────────────────────────────────────
-    After `_download_and_process_raw()` is called (inside `__init__`), the
-    following attributes must be fully populated:
-
-    self.all_item_seqs : dict[raw_user_id (str) -> list[raw_item_id (str)]]
-        The complete chronologically-ordered interaction sequence for each user.
-        Uses raw string IDs (not integer IDs).
-        Example:
-            {
-                'user_A': ['item_1', 'item_3', 'item_7'],
-                'user_B': ['item_2', 'item_5'],
-            }
-
-    self.id_mapping : dict with four keys:
-        'user2id' : dict[raw_user_id (str) -> int]   # integer IDs start at 1; 0 is reserved for [PAD]
-        'item2id' : dict[raw_item_id (str) -> int]   # same convention
-        'id2user' : list[str]                        # index = integer ID, so id2user[0] == '[PAD]'
-        'id2item' : list[str]                        # same convention
-        Example:
-            {
-                'user2id': {'[PAD]': 0, 'user_A': 1, 'user_B': 2},
-                'item2id': {'[PAD]': 0, 'item_1': 1, 'item_2': 2, ...},
-                'id2user': ['[PAD]', 'user_A', 'user_B'],
-                'id2item': ['[PAD]', 'item_1', 'item_2', ...],
-            }
-
-    self.item2meta : dict[raw_item_id (str) -> any] | None
-        Optional. Maps each item to its metadata (e.g. a text description string,
-        or a dict of features).
-
-    ─────────────────────────────────────────────────────────────────────────
-    OUTPUT OF split() — what the tokenizer receives
-    ─────────────────────────────────────────────────────────────────────────
-    `split()` returns a dict of three Hugging Face Dataset objects:
-        {
-            'train': Dataset(columns=['user', 'item_seq']),
-            'val':   Dataset(columns=['user', 'item_seq']),
-            'test':  Dataset(columns=['user', 'item_seq']),
-        }
-
-    Each row has:
-        'user'     : str              -- raw user string ID
-        'item_seq' : list[str]        -- ordered list of raw item string IDs
-
-    The split strategy is leave-one-out by default:
-        test  → full sequence  [item_1, ..., item_N]
-        val   → all but last   [item_1, ..., item_{N-1}]
-        train → all but last 2 [item_1, ..., item_{N-2}]
-
-    The tokenizer is responsible for converting raw string IDs to integer token
-    IDs and producing model-specific tensors (input_ids, labels, etc.).
-    """
-
     def __init__(self, config: dict):
         self.config = config
-        # Accelerator is optional; only used in distributed training contexts
-        self.accelerator = self.config.get('accelerator', None)
-        self.logger = logging.getLogger(__name__)
+        self.accelerator = self.config['accelerator']
+        self.logger = getLogger()
 
-        # Filled by dataset-specific raw processing.
         self.all_item_seqs = {}
         self.id_mapping = {
             'user2id': {'[PAD]': 0},
@@ -88,8 +16,6 @@ class AbstractDataset:
             'id2item': ['[PAD]']
         }
         self.item2meta = None
-
-        # Cache for split() output so splitting runs only once.
         self.split_data = None
 
     def __str__(self) -> str:
@@ -102,21 +28,30 @@ class AbstractDataset:
     @property
     def n_users(self):
         """
-        Number of users including `[PAD]`.
+        Returns the number of users in the dataset.
+
+        Returns:
+            int: The number of users in the dataset.
         """
         return len(self.user2id)
 
     @property
     def n_items(self):
         """
-        Number of items including `[PAD]`.
+        Returns the total number of items in the dataset.
+
+        Returns:
+            int: The number of items in the dataset.
         """
         return len(self.item2id)
 
     @property
     def n_interactions(self):
         """
-        Total number of user-item interactions across all user sequences.
+        Returns the total number of interactions in the dataset.
+
+        Returns:
+            int: The total number of interactions.
         """
         n_inters = 0
         for user in self.all_item_seqs:
@@ -126,52 +61,48 @@ class AbstractDataset:
     @property
     def avg_item_seq_len(self):
         """
-        Average sequence length per user.
+        Returns the average length of item sequences in the dataset.
+
+        Returns:
+            float: The average length of item sequences.
         """
         return self.n_interactions / self.n_users
 
     @property
     def user2id(self):
         """
-        Shortcut for `self.id_mapping['user2id']`.
+        Returns the user-to-id mapping.
+
+        Returns:
+            dict: The user-to-id mapping.
         """
         return self.id_mapping['user2id']
 
     @property
     def item2id(self):
         """
-        Shortcut for `self.id_mapping['item2id']`.
+        Returns the item-to-id mapping.
+
+        Returns:
+            dict: The item-to-id mapping.
         """
         return self.id_mapping['item2id']
 
     def _download_and_process_raw(self):
         """
-        [MUST OVERRIDE IN SUBCLASS]
-
-        Download/load/process raw data, then populate at least:
-            - self.all_item_seqs
-            - self.id_mapping
-            - self.item2meta (optional)
+        This method should be implemented in the subclass.
+        It is responsible for downloading and processing the raw data.
         """
         raise NotImplementedError('This method should be implemented in the subclass')
 
     def _leave_one_out(self):
         """
-        Split sequences using leave-one-out policy.
-
-        For a full user sequence `[i1, i2, ..., iN]`:
-            - `test` uses `[i1, ..., iN]`
-            - `val` uses `[i1, ..., i(N-1)]` if `N > 1`
-            - `train` uses `[i1, ..., i(N-2)]` if `N > 2`
-
-        Returned datasets contain raw string IDs (not token IDs).
+        Splits the dataset into train, validation, and test sets using the leave-one-out strategy.
 
         Returns:
-            dict: {
-                'train': Dataset(columns=['user', 'item_seq']),
-                'val': Dataset(columns=['user', 'item_seq']),
-                'test': Dataset(columns=['user', 'item_seq']),
-            }
+            dict: A dictionary containing the train, validation, and test datasets.
+                  Each dataset is represented as a dictionary with 'user' and 'item_seq' keys.
+                  The 'user' key contains a list of users, and the 'item_seq' key contains a list of item sequences.
         """
         datasets = {'train': {'user': [], 'item_seq': []},
                     'val': {'user': [], 'item_seq': []},
@@ -191,14 +122,10 @@ class AbstractDataset:
 
     def split(self):
         """
-        Build and cache split datasets according to `config['split']`.
-
-        Supported split strategies:
-            - 'leave_one_out'
-            - 'last_out' (alias of leave-one-out behavior here)
+        Split the dataset into train, validation, and test sets based on the specified split strategy.
 
         Returns:
-            dict: split datasets for `train`, `val`, `test`.
+            datasets (dict): A dictionary containing the train and test datasets.
         """
         if self.split_data is not None:
             return self.split_data
@@ -213,10 +140,5 @@ class AbstractDataset:
         return self.split_data
 
     def log(self, message, level='info'):
-        """Simple logging that works with or without accelerator."""
-        log_func = getattr(self.logger, level, self.logger.info)
-        log_func(message)
-        # Also log to accelerator if available (for distributed training)
-        if self.accelerator is not None:
-            from genrec.utils import log
-            log(message, self.accelerator, self.logger, level=level)
+        from genrec.utils import log
+        return log(message, self.config['accelerator'], self.logger, level=level)

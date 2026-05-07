@@ -1,4 +1,4 @@
-torch --index-url https://download.pytorch.org/whl/cu129
+# torch --index-url https://download.pytorch.org/whl/cu129
 accelerate==1.10.1
 datasets==4.0.0
 faiss-cpu==1.12.0

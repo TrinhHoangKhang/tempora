@@ -100,11 +100,7 @@ def init_logger(config: dict):
 
 
 def log(message, accelerator, logger, level='info'):
-    # If no accelerator (standalone mode), always log
-    # If accelerator exists, only log on main process
-    should_log = accelerator is None or accelerator.is_main_process
-    
-    if should_log:
+    if accelerator.is_main_process:
         if level == 'info':
             logger.info(message)
         elif level == 'error':
