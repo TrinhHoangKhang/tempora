@@ -3,13 +3,13 @@ metadata: sentence
 
 # Config the sentence embedding model
 #   Sentence T5
-# sent_emb_model: sentence-transformers/sentence-t5-base
-# sent_emb_dim: 768
-# sent_emb_pca: 128
+sent_emb_model: sentence-transformers/sentence-t5-base
+sent_emb_dim: 768
+sent_emb_pca: 128
 #   OpenAI Embedding Model
-sent_emb_model: text-embedding-3-large
-sent_emb_dim: 3072
-sent_emb_pca: 512
+#sent_emb_model: text-embedding-3-large
+#sent_emb_dim: 3072
+#sent_emb_pca: 512
 openai_api_key: ~
 
 sent_emb_batch_size: 512
