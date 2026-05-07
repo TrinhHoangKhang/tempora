@@ -485,29 +485,17 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 2: Initialize Differentiable OPQ (if enabled) ============
         if use_differentiable_opq:
-            # Validate required config keys
-            if 'sent_emb_dim' not in config:
-                raise ValueError("Config must include 'sent_emb_dim' for DifferentiableOPQ")
-            
-            if hasattr(tokenizer, 'opq_rotation') and hasattr(tokenizer, 'pq_codebooks') and \
-               tokenizer.opq_rotation is not None and tokenizer.pq_codebooks is not None:
-                self.dopq = DifferentiableOPQ(
-                    embedding_dim=config['sent_emb_dim'],
-                    n_codebook=tokenizer.n_digit,
-                    codebook_size=tokenizer.codebook_size,
-                    rotation_matrix=tokenizer.opq_rotation.to(self.config['device']),
-                    codebook_matrices=tokenizer.pq_codebooks.to(self.config['device']),
-                    temperature=config.get('quantizer_temperature', 1.0)
-                ).to(self.config['device'])
-                print(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
-            else:
-                self.dopq = DifferentiableOPQ(
-                    embedding_dim=config['sent_emb_dim'],
-                    n_codebook=tokenizer.n_digit,
-                    codebook_size=tokenizer.codebook_size,
-                    temperature=config.get('quantizer_temperature', 1.0)
-                ).to(self.config['device'])
-                print(f"[MODEL] DifferentiableOPQ initialized with random parameters")
+            # DifferentiableOPQ operates on token embeddings with dimension n_embd
+            # NOT on sentence embeddings (sent_emb_dim). The pre-trained OPQ parameters
+            # from FAISS are trained on sentence embeddings and are incompatible with
+            # a different embedding dimension, so we initialize with random parameters.
+            self.dopq = DifferentiableOPQ(
+                embedding_dim=config['n_embd'],
+                n_codebook=tokenizer.n_digit,
+                codebook_size=tokenizer.codebook_size,
+                temperature=config.get('quantizer_temperature', 1.0)
+            ).to(self.config['device'])
+            print(f"[MODEL] DifferentiableOPQ initialized with random parameters (operates on token embedding space)")
         else:
             self.dopq = None
             print(f"[MODEL] DifferentiableOPQ disabled")
@@ -615,6 +603,7 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 3: [Optional] DifferentiableOPQ ============
         if self.use_differentiable_opq and self.dopq is not None:
+            # Apply learnable quantization to token embeddings
             dopq_output = self.dopq(input_embs, return_soft=True, return_hard=True)
             # Use soft reconstructions for backprop
             input_embs = dopq_output['soft']
