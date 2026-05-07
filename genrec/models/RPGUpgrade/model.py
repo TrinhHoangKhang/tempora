@@ -775,3 +775,6 @@ class RPGUpgrade(AbstractModel):
             Predicted item IDs for next position
         """
         raise NotImplementedError("Generation not yet fully implemented for RPGUpgrade")
+
+
+__all__ = ['RPGUpgrade', 'DifferentiableOPQ', 'GumbelSoftmax', 'ResBlock']
