@@ -499,7 +499,7 @@ class RPGUpgrade(AbstractModel):
                     codebook_matrices=tokenizer.pq_codebooks.to(self.config['device']),
                     temperature=config.get('quantizer_temperature', 1.0)
                 ).to(self.config['device'])
-                self.log(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
+                print(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
             else:
                 self.dopq = DifferentiableOPQ(
                     embedding_dim=config['sent_emb_dim'],
@@ -507,10 +507,10 @@ class RPGUpgrade(AbstractModel):
                     codebook_size=tokenizer.codebook_size,
                     temperature=config.get('quantizer_temperature', 1.0)
                 ).to(self.config['device'])
-                self.log(f"[MODEL] DifferentiableOPQ initialized with random parameters")
+                print(f"[MODEL] DifferentiableOPQ initialized with random parameters")
         else:
             self.dopq = None
-            self.log(f"[MODEL] DifferentiableOPQ disabled")
+            print(f"[MODEL] DifferentiableOPQ disabled")
         
         # ============ STEP 3: Initialize GPT-2 backbone ============
         gpt2config = GPT2Config(
@@ -737,10 +737,10 @@ class RPGUpgrade(AbstractModel):
 
     def init_graph(self):
         """Initialize graph for constrained decoding."""
-        self.log("[MODEL] Building item-item similarity matrix...")
+        print("[MODEL] Building item-item similarity matrix...")
         item_item_sim = self.build_ii_sim_mat()
         
-        self.log("[MODEL] Building adjacency list...")
+        print("[MODEL] Building adjacency list...")
         adjacency = self.build_adjacency_list(item_item_sim)
         
         self.decoding_graph = adjacency
