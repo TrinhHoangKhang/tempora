@@ -5,4 +5,4 @@
 # LICENSE file in the root directory of this source tree.
 
 from genrec.models.RPG.model import RPG
-from genrec.models.RPG_upgrade.model import RPGUpgrade
+from genrec.models.RPGUpgrade.model import RPGUpgrade
