@@ -1,3 +1,9 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+
 import os
 import math
 import json
@@ -253,7 +259,7 @@ class RPGTokenizer(AbstractTokenizer):
         # Load semantic IDs
         sem_ids_path = os.path.join(
             dataset.cache_dir, 'processed',
-            f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.json'
+            f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.sem_ids'
         )
 
         if not os.path.exists(sem_ids_path):

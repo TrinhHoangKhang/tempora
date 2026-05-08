@@ -1,3 +1,9 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# All rights reserved.
+
+# This source code is licensed under the license found in the
+# LICENSE file in the root directory of this source tree.
+
 import os
 import gzip
 import json
@@ -365,20 +371,7 @@ class AmazonReviews2014(AbstractDataset):
         # Download raw data files
         raw_data_path = os.path.join(self.cache_dir, 'raw')
         os.makedirs(raw_data_path, exist_ok=True)
-        
-        # Use accelerator.main_process_first() if available (for DDP), otherwise download directly
-        if self.accelerator is not None:
-            with self.accelerator.main_process_first():
-                reviews_localpath = self._download_raw(
-                    path=raw_data_path,
-                    type='reviews'
-                )
-                meta_localpath = self._download_raw(
-                    path=raw_data_path,
-                    type='meta'
-                )
-        else:
-            # Standalone mode: download directly
+        with self.accelerator.main_process_first(): # only download once when ddp
             reviews_localpath = self._download_raw(
                 path=raw_data_path,
                 type='reviews'

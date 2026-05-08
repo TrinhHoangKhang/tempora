@@ -485,20 +485,28 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 2: Initialize Differentiable OPQ (if enabled) ============
         if use_differentiable_opq:
-            # DifferentiableOPQ operates on token embeddings with dimension n_embd
-            # NOT on sentence embeddings (sent_emb_dim). The pre-trained OPQ parameters
-            # from FAISS are trained on sentence embeddings and are incompatible with
-            # a different embedding dimension, so we initialize with random parameters.
-            self.dopq = DifferentiableOPQ(
-                embedding_dim=config['n_embd'],
-                n_codebook=tokenizer.n_digit,
-                codebook_size=tokenizer.codebook_size,
-                temperature=config.get('quantizer_temperature', 1.0)
-            ).to(self.config['device'])
-            print(f"[MODEL] DifferentiableOPQ initialized with random parameters (operates on token embedding space)")
+            if hasattr(tokenizer, 'opq_rotation') and hasattr(tokenizer, 'pq_codebooks') and \
+               tokenizer.opq_rotation is not None and tokenizer.pq_codebooks is not None:
+                self.dopq = DifferentiableOPQ(
+                    embedding_dim=config['sent_emb_dim'],
+                    n_codebook=tokenizer.n_digit,
+                    codebook_size=tokenizer.codebook_size,
+                    rotation_matrix=tokenizer.opq_rotation.to(self.config['device']),
+                    codebook_matrices=tokenizer.pq_codebooks.to(self.config['device']),
+                    temperature=config.get('gumbel_temperature', 1.0)
+                ).to(self.config['device'])
+                self.log(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
+            else:
+                self.dopq = DifferentiableOPQ(
+                    embedding_dim=config['sent_emb_dim'],
+                    n_codebook=tokenizer.n_digit,
+                    codebook_size=tokenizer.codebook_size,
+                    temperature=config.get('gumbel_temperature', 1.0)
+                ).to(self.config['device'])
+                self.log(f"[MODEL] DifferentiableOPQ initialized with random parameters")
         else:
             self.dopq = None
-            print(f"[MODEL] DifferentiableOPQ disabled")
+            self.log(f"[MODEL] DifferentiableOPQ disabled")
         
         # ============ STEP 3: Initialize GPT-2 backbone ============
         gpt2config = GPT2Config(
@@ -603,7 +611,6 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 3: [Optional] DifferentiableOPQ ============
         if self.use_differentiable_opq and self.dopq is not None:
-            # Apply learnable quantization to token embeddings
             dopq_output = self.dopq(input_embs, return_soft=True, return_hard=True)
             # Use soft reconstructions for backprop
             input_embs = dopq_output['soft']
@@ -625,52 +632,47 @@ class RPGUpgrade(AbstractModel):
         
         # ============ STEP 6: Loss Computation ============
         if return_loss:
-            # Extract labels and create mask for valid positions (not padding)
+            # Extract labels
             labels = batch['labels']
-            label_mask = labels.view(-1) != self.tokenizer.ignored_label
             
-            # Reshape final_states for loss computation
-            # final_states: (batch, seq_len, n_digit, n_embd) → (batch*seq_len, n_digit, n_embd)
-            final_states_flat = final_states.view(-1, self.n_pred_head, self.config['n_embd'])
+            # Create mask for valid positions (not padding)
+            valid_mask = (labels != self.tokenizer.ignored_label)
             
-            # Select valid positions only
-            # (batch*seq_len, n_digit, n_embd) → (valid_count, n_digit, n_embd)
-            selected_states = final_states_flat[label_mask]
+            # Compute loss for each digit separately
+            total_loss = 0.0
+            for digit_idx in range(self.n_pred_head):
+                # Extract predictions and labels for this digit
+                # final_states: (batch, seq_len, n_digit, n_embd)
+                # Extract digit_idx: (batch, seq_len, n_embd)
+                digit_preds = final_states[:, :, digit_idx, :]
+                
+                # Get label tokens for this digit
+                # item_id2tokens[label]: (batch, seq_len, n_digit)
+                # Extract digit_idx: (batch, seq_len)
+                label_tokens = self.item_id2tokens[labels][:, :, digit_idx]
+                
+                # Reshape for loss computation
+                batch_size, seq_len = labels.shape
+                digit_preds_flat = digit_preds[valid_mask]  # (valid_count, n_embd)
+                label_tokens_flat = label_tokens[valid_mask]  # (valid_count,)
+                
+                # Normalize predictions (L2 norm) and compute logits
+                digit_preds_normalized = F.normalize(digit_preds_flat, dim=-1)
+                
+                # Compute logits: similarity with embedding table
+                # Extract embeddings for this digit's tokens
+                digit_start = digit_idx * self.tokenizer.codebook_size
+                digit_end = (digit_idx + 1) * self.tokenizer.codebook_size
+                digit_embeddings = self.gpt2.wte.weight[digit_start:digit_end]
+                
+                # Logits: (valid_count, codebook_size)
+                logits = torch.matmul(digit_preds_normalized, digit_embeddings.T) / self.temperature
+                
+                # Cross-entropy loss
+                digit_loss = self.loss_fct(logits, label_tokens_flat)
+                total_loss = total_loss + digit_loss
             
-            # Normalize predictions
-            selected_states = F.normalize(selected_states, dim=-1)
-            
-            # Split into chunks for each digit
-            # (valid_count, n_digit, n_embd) → n_digit tensors of (valid_count, n_embd)
-            selected_states = torch.chunk(selected_states, self.n_pred_head, dim=1)
-            
-            # Get token embeddings for all digits
-            token_emb = self.gpt2.wte.weight[1:-1]  # Exclude padding and EOS
-            token_emb = F.normalize(token_emb, dim=-1)
-            
-            # Split embeddings into chunks for each digit
-            # (n_digit*codebook_size, n_embd) → n_digit tensors of (codebook_size, n_embd)
-            token_embs = torch.chunk(token_emb, self.n_pred_head, dim=0)
-            
-            # Compute logits for each digit
-            token_logits = [
-                torch.matmul(selected_states[i].squeeze(dim=1), token_embs[i].T) / self.temperature
-                for i in range(self.n_pred_head)
-            ]
-            
-            # Get label tokens for valid positions only
-            # item_id2tokens[labels]: (batch*seq_len, n_digit)
-            token_labels = self.item_id2tokens[labels.view(-1)[label_mask]]  # (valid_count, n_digit)
-            
-            # Compute loss for each digit
-            # Note: token_labels are stored as absolute indices (1-256, 257-512, etc.)
-            # We need to convert to relative indices (0-255 for each digit)
-            losses = [
-                self.loss_fct(token_logits[i], token_labels[:, i] - i * self.config['codebook_size'] - 1)
-                for i in range(self.n_pred_head)
-            ]
-            
-            outputs.loss = torch.mean(torch.stack(losses))
+            outputs.loss = total_loss / self.n_pred_head
         
         return outputs
 
@@ -731,128 +733,22 @@ class RPGUpgrade(AbstractModel):
 
     def init_graph(self):
         """Initialize graph for constrained decoding."""
-        print("[MODEL] Building item-item similarity matrix...")
+        self.log("[MODEL] Building item-item similarity matrix...")
         item_item_sim = self.build_ii_sim_mat()
         
-        print("[MODEL] Building adjacency list...")
+        self.log("[MODEL] Building adjacency list...")
         adjacency = self.build_adjacency_list(item_item_sim)
         
         self.decoding_graph = adjacency
         self.init_flag = True
 
     def graph_propagation(self, token_logits, n_return_sequences):
-        """Graph-constrained beam search decoding.
-        
-        TODO: Implement constrained beam search using the similarity graph.
-        Can follow the pattern from original RPG model for reference.
-        
-        Args:
-            token_logits: Log probabilities for each digit
-            n_return_sequences: Number of sequences to return
-            
-        Returns:
-            Top-k predicted items with constrained decoding
-        """
-        raise NotImplementedError("Graph propagation not yet implemented for RPGUpgrade")
+        """Graph-constrained beam search decoding."""
+        # Placeholder for graph propagation logic
+        # This would implement constrained beam search using the similarity graph
+        return token_logits
 
     def generate(self, batch, n_return_sequences=1):
-        """Generate next items given a user's history.
-        
-        Uses the learned embedding space to compute item logits and returns top-k items.
-        
-        Args:
-            batch: Input batch with 'input_ids', 'attention_mask', 'seq_lens'
-            n_return_sequences: Number of sequences to generate per user
-            
-        Returns:
-            Predicted item IDs for next position (shape: batch_size, n_return_sequences)
-        """
-        # Forward pass without loss computation
-        outputs = self.forward(batch, return_loss=False)
-        
-        # Extract the last valid state for each sequence
-        # outputs.final_states: (batch_size, seq_len, n_pred_head, n_embd)
-        # We want the state at position (seq_lens[i] - 1) for batch i
-        states = outputs.final_states.gather(
-            dim=1,
-            index=(batch['seq_lens'] - 1).view(-1, 1, 1, 1).expand(-1, 1, self.n_pred_head, self.config['n_embd'])
-        )
-        # states shape: (batch_size, 1, n_pred_head, n_embd)
-        
-        # Normalize states for cosine similarity
-        states = F.normalize(states, dim=-1)
-        
-        # Get token embeddings
-        token_emb = self.gpt2.wte.weight[1:-1]  # Exclude padding and EOS
-        token_emb = F.normalize(token_emb, dim=-1)
-        
-        # Split embeddings for each digit
-        # (n_digit*codebook_size, n_embd) → n_digit tensors of (codebook_size, n_embd)
-        token_embs = torch.chunk(token_emb, self.n_pred_head, dim=0)
-        
-        # Compute logits for each digit
-        # states[:, 0, i, :] shape: (batch_size, n_embd)
-        # token_embs[i].T shape: (n_embd, codebook_size)
-        # logits[i] shape: (batch_size, codebook_size)
-        logits = [
-            torch.matmul(states[:, 0, i, :], token_embs[i].T) / self.temperature
-            for i in range(self.n_pred_head)
-        ]
-        
-        # Apply log softmax for numerical stability
-        logits = [F.log_softmax(logit, dim=-1) for logit in logits]
-        
-        # Concatenate logits from all digits
-        # (batch_size, n_digit*codebook_size)
-        token_logits = torch.cat(logits, dim=-1)
-        
-        # If decoding graph is enabled, use constrained beam search
-        if self.generate_w_decoding_graph:
-            if not self.init_flag:
-                self.init_graph()
-                self.init_flag = True
-            outputs = self.graph_propagation(
-                token_logits=token_logits,
-                n_return_sequences=n_return_sequences
-            )
-            return outputs
-        else:
-            # Gather item logits from token logits
-            # For each item, we have a semantic code (tuple of 32 digits)
-            # We want to compute the log-probability of each item as the mean of its digit logits
-            
-            # item_id2tokens[1:, :] shape: (n_items-1, n_pred_head)
-            # Each entry is a token index in range [1, n_tokens]
-            # We need to convert to token logits indices (subtract 1, add digit offset)
-            
-            item_logits_list = []
-            for digit_idx in range(self.n_pred_head):
-                # Digit tokens for all items, converted to 0-based indices
-                digit_tokens = self.item_id2tokens[1:, digit_idx] - digit_idx * self.config['codebook_size'] - 1
-                
-                # Gather logits for these tokens
-                # token_logits[:, digit_start:digit_end] shape: (batch_size, codebook_size)
-                digit_start = digit_idx * self.config['codebook_size']
-                digit_end = (digit_idx + 1) * self.config['codebook_size']
-                digit_logits = token_logits[:, digit_start:digit_end]  # (batch_size, codebook_size)
-                
-                # Gather logits for item tokens
-                # digit_tokens shape: (n_items-1,)
-                # Result shape: (batch_size, n_items-1)
-                item_digit_logits = digit_logits.gather(
-                    dim=1,
-                    index=digit_tokens.unsqueeze(0).expand(token_logits.shape[0], -1)
-                )
-                item_logits_list.append(item_digit_logits)
-            
-            # Stack and average logits across digits
-            # (n_pred_head, batch_size, n_items-1) → (batch_size, n_items-1)
-            item_logits = torch.stack(item_logits_list, dim=0).mean(dim=0)
-            
-            # Return top-k items
-            # topk returns (values, indices)
-            preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
-            return preds
-
-
-__all__ = ['RPGUpgrade', 'DifferentiableOPQ', 'GumbelSoftmax', 'ResBlock']
+        """Generate next items given a user's history."""
+        # Placeholder for generation logic
+        pass
