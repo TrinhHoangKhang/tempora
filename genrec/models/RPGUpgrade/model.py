@@ -477,6 +477,8 @@ class RPGUpgrade(AbstractModel):
                                    Requires tokenizer to have opq_rotation and pq_codebooks.
         """
         super(RPGUpgrade, self).__init__(config, dataset, tokenizer)
+        from logging import getLogger
+        self.logger = getLogger()
         
         self.use_differentiable_opq = use_differentiable_opq
         
@@ -493,7 +495,7 @@ class RPGUpgrade(AbstractModel):
                     codebook_size=tokenizer.codebook_size,
                     rotation_matrix=tokenizer.opq_rotation.to(self.config['device']),
                     codebook_matrices=tokenizer.pq_codebooks.to(self.config['device']),
-                    temperature=config.get('gumbel_temperature', 1.0)
+                    temperature=config.get('quantizer_temperature', 1.0)
                 ).to(self.config['device'])
                 self.log(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
             else:
@@ -501,7 +503,7 @@ class RPGUpgrade(AbstractModel):
                     embedding_dim=config['sent_emb_dim'],
                     n_codebook=tokenizer.n_digit,
                     codebook_size=tokenizer.codebook_size,
-                    temperature=config.get('gumbel_temperature', 1.0)
+                    temperature=config.get('quantizer_temperature', 1.0)
                 ).to(self.config['device'])
                 self.log(f"[MODEL] DifferentiableOPQ initialized with random parameters")
         else:
@@ -524,14 +526,16 @@ class RPGUpgrade(AbstractModel):
             initializer_range=config['initializer_range'],
             eos_token_id=tokenizer.eos_token,
         )
-        self.gpt2 = GPT2Model(gpt2config).to(self.config['device'])
+        self.gpt2 = GPT2Model(gpt2config)
+        self.gpt2 = self.gpt2.to(self.config['device'])
         
         # ============ STEP 4: Create 32 parallel prediction heads ============
         self.n_pred_head = self.tokenizer.n_digit
         pred_head_list = []
         for i in range(self.n_pred_head):
             pred_head_list.append(ResBlock(self.config['n_embd']))
-        self.pred_heads = nn.Sequential(*pred_head_list).to(self.config['device'])
+        self.pred_heads = nn.Sequential(*pred_head_list)
+        self.pred_heads = self.pred_heads.to(self.config['device'])
         
         # ============ STEP 5: Setup loss and generation parameters ============
         self.temperature = self.config['temperature']
@@ -661,8 +665,9 @@ class RPGUpgrade(AbstractModel):
                 
                 # Compute logits: similarity with embedding table
                 # Extract embeddings for this digit's tokens
-                digit_start = digit_idx * self.tokenizer.codebook_size
-                digit_end = (digit_idx + 1) * self.tokenizer.codebook_size
+                # Add 1 offset because token 0 is padding, token 1+ are data
+                digit_start = digit_idx * self.tokenizer.codebook_size + 1
+                digit_end = (digit_idx + 1) * self.tokenizer.codebook_size + 1
                 digit_embeddings = self.gpt2.wte.weight[digit_start:digit_end]
                 
                 # Logits: (valid_count, codebook_size)
@@ -742,13 +747,131 @@ class RPGUpgrade(AbstractModel):
         self.decoding_graph = adjacency
         self.init_flag = True
 
+    def log(self, message: str, level: str = 'info'):
+        """Log messages using the configured logger."""
+        from genrec.utils import log
+        return log(message, self.config['accelerator'], self.logger, level=level)
+
     def graph_propagation(self, token_logits, n_return_sequences):
-        """Graph-constrained beam search decoding."""
-        # Placeholder for graph propagation logic
-        # This would implement constrained beam search using the similarity graph
-        return token_logits
+        """
+        Graph-based search to find valid items constrained by the k-NN graph.
+        
+        This is a simplified version that uses random initialization and graph traversal
+        to find semantically similar items during decoding.
+        
+        Args:
+            token_logits: (batch_size, vocab_size) model predictions
+            n_return_sequences: Number of items to recommend
+        
+        Returns:
+            predictions: (batch_size, n_return_sequences, 1) top item indices
+            visited_counts: (batch_size, 1) number of items explored
+        """
+        batch_size = token_logits.shape[0]
+        visited_nodes = {}
+        for batch_id in range(batch_size):
+            visited_nodes[batch_id] = set()
+
+        # Random initialization: start with num_beams random items
+        topk_nodes_sorted = torch.randint(
+            1, self.dataset.n_items,
+            (batch_size, self.num_beams),
+            dtype=torch.long,
+            device=token_logits.device
+        )
+
+        # Track initial items
+        for batch_id in range(batch_size):
+            for node in topk_nodes_sorted[batch_id].cpu().numpy().tolist():
+                visited_nodes[batch_id].add(node)
+
+        # Iterative graph traversal
+        for _ in range(self.propagation_steps):
+            all_neighbors = self.adjacency[topk_nodes_sorted].view(batch_size, -1)
+            next_nodes = []
+            
+            for batch_id in range(batch_size):
+                neighbors_in_batch = torch.unique(all_neighbors[batch_id])
+                
+                for node in neighbors_in_batch.cpu().numpy().tolist():
+                    visited_nodes[batch_id].add(node)
+                
+                # Rank neighbors by model confidence
+                neighbor_tokens = self.item_id2tokens[neighbors_in_batch]  # (n_neighbors, n_digit)
+                neighbor_logits = token_logits[batch_id][neighbor_tokens - 1].mean(dim=-1)  # (n_neighbors,)
+                
+                # Select top num_beams
+                k = min(self.num_beams, neighbor_logits.shape[0])
+                _, top_indices = torch.topk(neighbor_logits, k)
+                next_nodes.append(neighbors_in_batch[top_indices])
+            
+            # Pad shorter sequences to maintain batch shape
+            max_len = max(node.shape[0] for node in next_nodes)
+            padded_nodes = []
+            for node in next_nodes:
+                if node.shape[0] < max_len:
+                    padded = torch.cat([node, torch.zeros(max_len - node.shape[0], dtype=node.dtype, device=node.device)])
+                else:
+                    padded = node[:max_len]
+                padded_nodes.append(padded)
+            
+            topk_nodes_sorted = torch.stack(padded_nodes, dim=0)[:, :self.num_beams]
+
+        visited_counts = torch.FloatTensor([[len(visited_nodes[batch_id])] for batch_id in range(batch_size)])
+        return topk_nodes_sorted[:, :n_return_sequences].unsqueeze(-1), visited_counts
 
     def generate(self, batch, n_return_sequences=1):
-        """Generate next items given a user's history."""
-        # Placeholder for generation logic
-        pass
+        """
+        Generate next items given a user's history.
+        
+        Supports both direct greedy decoding and graph-constrained beam search.
+        
+        Args:
+            batch: Dictionary with 'input_ids', 'seq_lens', 'attention_mask'
+            n_return_sequences: Number of items to recommend (k in top-k)
+        
+        Returns:
+            predictions: (batch_size, n_return_sequences, 1) recommended item indices
+            OR
+            (predictions, visited_counts) if using graph-constrained decoding
+        """
+        # Forward pass without loss
+        outputs = self.forward(batch, return_loss=False)
+        
+        # Extract prediction at sequence end
+        states = outputs.final_states.gather(
+            dim=1,
+            index=(batch['seq_lens'] - 1).view(-1, 1, 1, 1).expand(-1, 1, self.n_pred_head, self.config['n_embd'])
+        )
+        
+        # Normalize and compute token logits
+        states = F.normalize(states, dim=-1)
+        token_emb = self.gpt2.wte.weight[1:-1]
+        token_emb = F.normalize(token_emb, dim=-1)
+        token_embs = torch.chunk(token_emb, self.n_pred_head, dim=0)
+        
+        logits = [torch.matmul(states[:, 0, i, :], token_embs[i].T) / self.temperature 
+                 for i in range(self.n_pred_head)]
+        logits = [F.log_softmax(logit, dim=-1) for logit in logits]
+        token_logits = torch.cat(logits, dim=-1)
+        
+        # Decode items
+        if self.generate_w_decoding_graph:
+            if not self.init_flag:
+                self.init_graph()
+                self.init_flag = True
+            
+            return self.graph_propagation(
+                token_logits=token_logits,
+                n_return_sequences=n_return_sequences
+            )
+        else:
+            # Direct greedy decoding
+            item_logits = torch.gather(
+                input=token_logits.unsqueeze(-2).expand(-1, self.dataset.n_items, -1),
+                dim=-1,
+                index=(self.item_id2tokens[1:, :] - 1).unsqueeze(0).expand(token_logits.shape[0], -1, -1)
+            ).mean(dim=-1)
+            
+            preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
+            return preds.unsqueeze(-1)
