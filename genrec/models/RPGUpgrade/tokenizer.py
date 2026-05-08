@@ -124,7 +124,7 @@ def extract_pq_codebooks(faiss_index, embedding_dim: int, n_codebook: int, codeb
         raise RuntimeError(f"Failed to extract PQ codebooks: {str(e)}")
 
 
-class RPGTokenizerUpgrade(AbstractTokenizer):
+class RPGUpgradeTokenizer(AbstractTokenizer):
     """
     Upgraded RPG Tokenizer with Differentiable OPQ Support.
     
@@ -159,7 +159,7 @@ class RPGTokenizerUpgrade(AbstractTokenizer):
         self.n_codebook_bits = self._get_codebook_bits(config['codebook_size'])
         self.index_factory = f'OPQ{config["n_codebook"]},IVF1,PQ{config["n_codebook"]}x{self.n_codebook_bits}'
         
-        super(RPGTokenizerUpgrade, self).__init__(config, dataset)
+        super(RPGUpgradeTokenizer, self).__init__(config, dataset)
         self.item2id = dataset.item2id
         self.user2id = dataset.user2id
         self.id2item = dataset.id_mapping['id2item']
