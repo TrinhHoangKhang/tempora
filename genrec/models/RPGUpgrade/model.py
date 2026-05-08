@@ -490,7 +490,7 @@ class RPGUpgrade(AbstractModel):
             if hasattr(tokenizer, 'opq_rotation') and hasattr(tokenizer, 'pq_codebooks') and \
                tokenizer.opq_rotation is not None and tokenizer.pq_codebooks is not None:
                 self.dopq = DifferentiableOPQ(
-                    embedding_dim=config['sent_emb_dim'],
+                    embedding_dim=config['n_embd'],
                     n_codebook=tokenizer.n_digit,
                     codebook_size=tokenizer.codebook_size,
                     rotation_matrix=tokenizer.opq_rotation.to(self.config['device']),
@@ -500,7 +500,7 @@ class RPGUpgrade(AbstractModel):
                 self.log(f"[MODEL] DifferentiableOPQ initialized with extracted OPQ parameters")
             else:
                 self.dopq = DifferentiableOPQ(
-                    embedding_dim=config['sent_emb_dim'],
+                    embedding_dim=config['n_embd'],
                     n_codebook=tokenizer.n_digit,
                     codebook_size=tokenizer.codebook_size,
                     temperature=config.get('quantizer_temperature', 1.0)
