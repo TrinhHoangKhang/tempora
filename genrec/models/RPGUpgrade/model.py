@@ -665,7 +665,11 @@ class RPGUpgrade(AbstractModel):
                 digit_preds = digit_preds_valid[:, digit_idx, :]
                 
                 # Get label tokens for this digit: (valid_count,)
+                # item_id2tokens stores token IDs (1-8192), need to convert to digit values (0-255)
+                # Token ID layout: digit d's values are at indices (d*256+1) to (d*256+256)
+                # So: digit_value = token_id - d*256 - 1
                 label_tokens = item_tokens_valid[:, digit_idx]
+                label_digit_values = label_tokens - digit_idx * self.tokenizer.codebook_size - 1
                 
                 # Normalize predictions (L2 norm)
                 digit_preds_normalized = F.normalize(digit_preds, dim=-1)
@@ -680,8 +684,8 @@ class RPGUpgrade(AbstractModel):
                 # Logits: (valid_count, codebook_size)
                 logits = torch.matmul(digit_preds_normalized, digit_embeddings.T) / self.temperature
                 
-                # Cross-entropy loss
-                digit_loss = self.loss_fct(logits, label_tokens)
+                # Cross-entropy loss - note: label_digit_values should be in range [0, codebook_size)
+                digit_loss = self.loss_fct(logits, label_digit_values)
                 total_loss = total_loss + digit_loss
             
             outputs.loss = total_loss / self.n_pred_head
