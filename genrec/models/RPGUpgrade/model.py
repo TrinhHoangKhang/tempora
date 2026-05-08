@@ -642,26 +642,33 @@ class RPGUpgrade(AbstractModel):
             # Create mask for valid positions (not padding)
             valid_mask = (labels != self.tokenizer.ignored_label)
             
+            # Reshape tensors for easier indexing
+            batch_size, seq_len = labels.shape
+            # final_states: (batch, seq_len, n_digit, n_embd) -> (batch*seq_len, n_digit, n_embd)
+            digit_preds_flat = final_states.view(batch_size * seq_len, self.n_pred_head, self.config['n_embd'])
+            # labels: (batch, seq_len) -> (batch*seq_len,)
+            labels_flat = labels.view(batch_size * seq_len)
+            # valid_mask: (batch, seq_len) -> (batch*seq_len,)
+            valid_mask_flat = valid_mask.view(batch_size * seq_len)
+            
+            # Get item tokens: (batch*seq_len, n_digit)
+            item_tokens_flat = self.item_id2tokens[labels_flat]
+            
+            # Select only valid positions
+            digit_preds_valid = digit_preds_flat[valid_mask_flat]  # (valid_count, n_digit, n_embd)
+            item_tokens_valid = item_tokens_flat[valid_mask_flat]  # (valid_count, n_digit)
+            
             # Compute loss for each digit separately
             total_loss = 0.0
             for digit_idx in range(self.n_pred_head):
-                # Extract predictions and labels for this digit
-                # final_states: (batch, seq_len, n_digit, n_embd)
-                # Extract digit_idx: (batch, seq_len, n_embd)
-                digit_preds = final_states[:, :, digit_idx, :]
+                # Extract predictions for this digit: (valid_count, n_embd)
+                digit_preds = digit_preds_valid[:, digit_idx, :]
                 
-                # Get label tokens for this digit
-                # item_id2tokens[label]: (batch, seq_len, n_digit)
-                # Extract digit_idx: (batch, seq_len)
-                label_tokens = self.item_id2tokens[labels][:, :, digit_idx]
+                # Get label tokens for this digit: (valid_count,)
+                label_tokens = item_tokens_valid[:, digit_idx]
                 
-                # Reshape for loss computation
-                batch_size, seq_len = labels.shape
-                digit_preds_flat = digit_preds[valid_mask]  # (valid_count, n_embd)
-                label_tokens_flat = label_tokens[valid_mask]  # (valid_count,)
-                
-                # Normalize predictions (L2 norm) and compute logits
-                digit_preds_normalized = F.normalize(digit_preds_flat, dim=-1)
+                # Normalize predictions (L2 norm)
+                digit_preds_normalized = F.normalize(digit_preds, dim=-1)
                 
                 # Compute logits: similarity with embedding table
                 # Extract embeddings for this digit's tokens
@@ -674,7 +681,7 @@ class RPGUpgrade(AbstractModel):
                 logits = torch.matmul(digit_preds_normalized, digit_embeddings.T) / self.temperature
                 
                 # Cross-entropy loss
-                digit_loss = self.loss_fct(logits, label_tokens_flat)
+                digit_loss = self.loss_fct(logits, label_tokens)
                 total_loss = total_loss + digit_loss
             
             outputs.loss = total_loss / self.n_pred_head
