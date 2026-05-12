@@ -1,9 +1,3 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 """
 RPG (Residual Quantization Product) Model for Sequential Recommendation
 
@@ -114,12 +108,12 @@ class RPG(AbstractModel):
             initializer_range=config['initializer_range'],
             eos_token_id=tokenizer.eos_token,
         )
-        # GPT-2 Token Embedding matrix shape: (vocab_size=8193, n_embd=768)
+        # GPT-2 Token Embedding matrix shape: (vocab_size=8193, n_embd=448)
         self.gpt2 = GPT2Model(gpt2config)
 
         # ============ STEP 3: Create 32 parallel prediction heads ============
         # One ResBlock per digit to refine the GPT-2 hidden states
-        # Input: (batch, seq_len, 768) → Output: (batch, seq_len, 768)
+        # Input: (batch, seq_len, 448) → Output: (batch, seq_len, 448)
         self.n_pred_head = self.tokenizer.n_digit  # 32
         pred_head_list = []
         for i in range(self.n_pred_head):

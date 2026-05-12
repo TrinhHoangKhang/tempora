@@ -60,6 +60,7 @@ class Trainer:
             train_dataloader: The dataloader for training data.
             val_dataloader: The dataloader for validation data.
         """
+        # ============ Initialize Optimizer ============
         optimizer = AdamW(
             self.model.parameters(),
             lr=self.config['lr'],
@@ -71,6 +72,9 @@ class Trainer:
             self.log('No training steps needed.')
             return None, None
 
+        # ============ Initialize Learning Rate Scheduler ============
+        # Cosine annealing with warmup: learning rate gradually increases during warmup,
+        # then gradually decreases following a cosine curve
         scheduler = get_scheduler(
             name="cosine",
             optimizer=optimizer,
@@ -81,6 +85,7 @@ class Trainer:
         self.model, optimizer, train_dataloader, val_dataloader, scheduler = self.accelerator.prepare(
             self.model, optimizer, train_dataloader, val_dataloader, scheduler
         )
+        # ============ Initialize TensorBoard Logging ============
         self.accelerator.init_trackers(
             project_name=get_file_name(self.config, suffix=''),
             config=config_for_log(self.config),
@@ -91,8 +96,9 @@ class Trainer:
         best_epoch = 0
         best_val_score = -1
 
+        # ============ Training Loop ============
         for epoch in range(n_epochs):
-            # Training
+            # ===== Training Phase =====
             self.model.train()
             total_loss = 0.0
             train_progress_bar = tqdm(
@@ -100,21 +106,24 @@ class Trainer:
                 total=len(train_dataloader),
                 desc=f"Training - [Epoch {epoch + 1}]",
             )
+            # Process each batch in the training dataloader
             for batch in train_progress_bar:
-                optimizer.zero_grad()
-                outputs = self.model(batch)
+                optimizer.zero_grad()  # Reset gradients
+                outputs = self.model(batch)  # Forward pass
                 loss = outputs.loss
-                self.accelerator.backward(loss)
+                self.accelerator.backward(loss)  # Backward pass (compute gradients)
+                # Clip gradients to prevent exploding gradients
                 if self.config['max_grad_norm'] is not None:
                     clip_grad_norm_(self.model.parameters(), self.config['max_grad_norm'])
-                optimizer.step()
-                scheduler.step()
+                optimizer.step()  # Update weights
+                scheduler.step()  # Update learning rate
                 total_loss = total_loss + loss.item()
 
             self.accelerator.log({"Loss/train_loss": total_loss / len(train_dataloader)}, step=epoch + 1)
             self.log(f'[Epoch {epoch + 1}] Train Loss: {total_loss / len(train_dataloader)}')
 
-            # Evaluation
+            # ===== Validation Phase =====
+            # Evaluate on validation set at specified intervals
             if (epoch + 1) % self.config['eval_interval'] == 0:
                 all_results = self.evaluate(val_dataloader, split='val')
                 if self.accelerator.is_main_process:
@@ -122,6 +131,7 @@ class Trainer:
                         self.accelerator.log({f"Val_Metric/{key}": all_results[key]}, step=epoch + 1)
                     self.log(f'[Epoch {epoch + 1}] Val Results: {all_results}')
                 val_score = all_results[self.config['val_metric']]
+                # Save model if validation score improves
                 if val_score > best_val_score:
                     best_val_score = val_score
                     best_epoch = epoch + 1
@@ -133,10 +143,11 @@ class Trainer:
                             torch.save(self.model.state_dict(), self.saved_model_ckpt)
                         self.log(f'[Epoch {epoch + 1}] Saved model checkpoint to {self.saved_model_ckpt}')
 
+                # Early stopping: stop if no improvement for 'patience' epochs
                 if self.config['patience'] is not None and epoch + 1 - best_epoch >= self.config['patience']:
-                    self.log(f'Early stopping at epoch {epoch + 1}')
+                    self.log(f'EARLY STOPPING AT EPOCH {epoch + 1}')
                     break
-        self.log(f'Best epoch: {best_epoch}, Best val score: {best_val_score}')
+        self.log(f'BEST EPOCH: {best_epoch}, BEST VAL SCORE ({self.config["val_metric"]}): {best_val_score}')
         return best_epoch, best_val_score
 
     def evaluate(self, dataloader, split='test'):
@@ -150,7 +161,7 @@ class Trainer:
         Returns:
             OrderedDict: A dictionary containing the evaluation results.
         """
-        self.model.eval()
+        self.model.eval()  # Set model to evaluation mode (disable dropout, etc.)
 
         all_results = defaultdict(list)
         val_progress_bar = tqdm(
@@ -158,6 +169,7 @@ class Trainer:
             total=len(dataloader),
             desc=f"Eval - {split}",
         )
+        # Process each batch without computing gradients
         for batch in val_progress_bar:
             with torch.no_grad():
                 batch = {k: v.to(self.accelerator.device) for k, v in batch.items()}
@@ -177,6 +189,8 @@ class Trainer:
                 for key, value in results.items():
                     all_results[key].append(value)
 
+        # ============ Aggregate Results Across All Batches ============
+        # Compute mean metrics over all evaluation samples
         output_results = OrderedDict()
         for metric in self.config['metrics']:
             for k in self.config['topk']:
