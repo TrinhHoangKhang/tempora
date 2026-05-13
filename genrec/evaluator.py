@@ -12,7 +12,8 @@ class Evaluator:
 
         self.eos_token = self.tokenizer.eos_token
         self.maxk = max(config['topk'])
-
+        self.debug_flag = False
+        
     def calculate_pos_index(self, preds, labels):
         preds = preds.detach().cpu()
         labels = labels.detach().cpu()
@@ -23,12 +24,17 @@ class Evaluator:
             cur_label = labels[i].tolist()
             
             # DEBUG
-            debug_flag = False
-            
+            if cur_label[0] > 5000 and self.debug_flag:
+                print("BATCH UNKNOWN")
+                print(f"DEBUG for example {i} of batch:")
+                print(f"  Original label: {labels[i].tolist()}")
+                print(f"  Processed label (after removing EOS): {cur_label}")
+                print(f"  Predictions: {preds[i].tolist()}")
+                self.debug_flag = False
+                 
             if self.eos_token in cur_label:
                 eos_pos = cur_label.index(self.eos_token)
                 cur_label = cur_label[:eos_pos]
-                debug_flag = True
                 
             for j in range(self.maxk):
                 cur_pred = preds[i, j].tolist()
@@ -37,14 +43,6 @@ class Evaluator:
                     pos_index[i, j] = True
                     break
                 
-            if debug_flag:
-                print("BATCH UNKNOWN")
-                print(f"EOS token: {self.eos_token}")
-                print(f"n_digit: {self.tokenizer.n_digit}, code_size: {self.tokenizer.codebook_size}")
-                print(f"DEBUG for example {i} of batch:")
-                print(f"  Original label: {labels[i].tolist()}")
-                print(f"  Processed label (after removing EOS): {cur_label}")
-                print(f"  Predictions: {preds[i].tolist()}")
         return pos_index
 
     def recall_at_k(self, pos_index, k):        
