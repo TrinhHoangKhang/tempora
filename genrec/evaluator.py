@@ -45,12 +45,8 @@ class Evaluator:
                 print(f"  Predictions: {preds[i].tolist()}")
         return pos_index
 
-    def recall_at_k(self, pos_index, k):
-        print(f"Calculating Recall@{k} with pos_index:\n{pos_index}")
-        value = pos_index[:, :k].sum(dim=1).cpu().float()
-        print(f"Recall@{k} values for each example: {value}")
-        
-        return value
+    def recall_at_k(self, pos_index, k):        
+        return pos_index[:, :k].sum(dim=1).cpu().float()
 
     def ndcg_at_k(self, pos_index, k):
         # Assume only one ground truth item per example
@@ -70,8 +66,4 @@ class Evaluator:
             for k in self.config['topk']:
                 results[f"{metric}@{k}"] = self.metric2func[metric](pos_index, k)
         results['n_visited_items'] = n_visited_items
-        
-        print("RESULTS:")
-        for key, value in results.items():
-            print(f"  {key}: {value}")  
         return results
