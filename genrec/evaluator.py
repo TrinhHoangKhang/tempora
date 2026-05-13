@@ -17,7 +17,7 @@ class Evaluator:
     def calculate_pos_index(self, preds, labels):
         preds = preds.detach().cpu()
         labels = labels.detach().cpu()
-        
+        labels = labels.max(dim=1)
         # Debug
         if self.debug_flag:
             print(f"DEBUG FROM EVALUATOR.CALCULATE_POS_INDEX():")
