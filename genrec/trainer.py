@@ -167,7 +167,7 @@ class Trainer:
             OrderedDict: A dictionary containing the evaluation results.
         """
         self.model.eval()  # Set model to evaluation mode (disable dropout, etc.)
-
+        loss_key = f'{split}_loss'
         all_results = defaultdict(list)
         val_progress_bar = tqdm(
             dataloader,
@@ -181,7 +181,7 @@ class Trainer:
                 
                 # ===== Calculate ranking metrics (recall, ndcg) and validation loss =====
                 if self.config['use_ddp']: # ddp, gather data from all devices for evaluation
-                    preds, val_loss = self.model.module.generate(batch, n_return_sequences=self.evaluator.maxk, return_loss=True)
+                    preds, loss = self.model.module.generate(batch, n_return_sequences=self.evaluator.maxk, return_loss=True)
                     if isinstance(preds, tuple):
                         preds, n_visited_items = preds
                         all_preds, all_labels, all_n_visited_items = self.accelerator.gather_for_metrics((preds, batch['labels'], n_visited_items))
@@ -190,14 +190,14 @@ class Trainer:
                         all_preds, all_labels = self.accelerator.gather_for_metrics((preds, batch['labels']))
                     results = self.evaluator.calculate_metrics(all_preds, all_labels)
                 else:
-                    preds, val_loss = self.model.generate(batch, n_return_sequences=self.evaluator.maxk, return_loss=True)
+                    preds, loss = self.model.generate(batch, n_return_sequences=self.evaluator.maxk, return_loss=True)
                     results = self.evaluator.calculate_metrics(preds, batch['labels'])
 
                 for key, value in results.items():
                     all_results[key].append(value)
                 
                 # Store validation loss (unsqueeze to make it 1-dimensional for concatenation)
-                all_results['val_loss'].append(val_loss.detach().cpu().unsqueeze(0))
+                all_results[loss_key].append(loss.detach().cpu().unsqueeze(0))
                 
 
         # ============ Aggregate Results Across All Batches ============
@@ -209,7 +209,7 @@ class Trainer:
                 output_results[key] = torch.cat(all_results[key]).mean().item()
                     
         output_results['n_visited_items'] = torch.cat(all_results['n_visited_items']).mean().item()
-        output_results['val_loss'] = torch.cat(all_results['val_loss']).mean().item()
+        output_results[loss_key] = torch.cat(all_results[loss_key]).mean().item()
         return output_results
 
     def case_evaluate(self, dataloader, split='test'):
