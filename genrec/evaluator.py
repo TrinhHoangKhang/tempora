@@ -40,14 +40,18 @@ class Evaluator:
             for j in range(self.maxk):
                 cur_pred = preds[i, j].tolist()
                 print(f"  Predicted item at rank {j+1}: {cur_pred}")
-                
+
                 if cur_pred == cur_label:
                     pos_index[i, j] = True
                     break
         return pos_index
 
     def recall_at_k(self, pos_index, k):
-        return pos_index[:, :k].sum(dim=1).cpu().float()
+        print(f"Calculating Recall@{k} with pos_index:\n{pos_index}")
+        value = pos_index[:, :k].sum(dim=1).cpu().float()
+        print(f"Recall@{k} values for each example: {value}")
+        
+        return value
 
     def ndcg_at_k(self, pos_index, k):
         # Assume only one ground truth item per example
