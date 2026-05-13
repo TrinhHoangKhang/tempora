@@ -17,33 +17,32 @@ class Evaluator:
         preds = preds.detach().cpu()
         labels = labels.detach().cpu()
         assert preds.shape[1] == self.maxk, f"preds.shape[1] = {preds.shape[1]} != {self.maxk}"
-
-        # ==== DEBUG ====
-        print(f"preds: {preds}")
-        print(f"Shape of preds: {preds.shape}")
-        print(f"labels: {labels}")
-        print(f"Shape of labels: {labels.shape}")
-        
         
         pos_index = torch.zeros((preds.shape[0], self.maxk), dtype=torch.bool)
         for i in range(preds.shape[0]):
             cur_label = labels[i].tolist()
             
-            print(f"Example {i}:")
-            print(f"  Original label: {cur_label}")
+            # DEBUG
+            debug_flag = False
             
             if self.eos_token in cur_label:
                 eos_pos = cur_label.index(self.eos_token)
                 cur_label = cur_label[:eos_pos]
-                print(f"Found EOS token at position {eos_pos}, truncated label: {cur_label}")
+                debug_flag = True
                 
             for j in range(self.maxk):
                 cur_pred = preds[i, j].tolist()
-                print(f"  Predicted item at rank {j+1}: {cur_pred}")
 
                 if cur_pred == cur_label:
                     pos_index[i, j] = True
                     break
+                
+            if debug_flag:
+                print("BATCH UNKNOWN")
+                print(f"DEBUG for example {i} of batch:")
+                print(f"  Original label: {labels[i].tolist()}")
+                print(f"  Processed label (after removing EOS): {cur_label}")
+                print(f"  Predictions: {preds[i].tolist()}")
         return pos_index
 
     def recall_at_k(self, pos_index, k):
