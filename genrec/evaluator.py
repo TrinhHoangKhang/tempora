@@ -40,6 +40,7 @@ class Evaluator:
             if debug_flag:
                 print("BATCH UNKNOWN")
                 print(f"EOS token: {self.eos_token}")
+                print(f"n_digit: {self.tokenizer.n_digit}, code_size: {self.tokenizer.code_size}")
                 print(f"DEBUG for example {i} of batch:")
                 print(f"  Original label: {labels[i].tolist()}")
                 print(f"  Processed label (after removing EOS): {cur_label}")
