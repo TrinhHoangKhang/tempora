@@ -59,12 +59,27 @@ def get_command_line_args_str():
 
 
 def get_file_name(config: dict, suffix: str = ''):
+    name_length_limit = 250
+    
     config_str = "".join([str(value) for key, value in config.items() if key != 'accelerator'])
     md5 = hashlib.md5(config_str.encode(encoding="utf-8")).hexdigest()[:6]
     command_line_args = get_command_line_args_str()
     logfilename = "{}-{}-{}-{}{}".format(
         config["run_id"], command_line_args, config['run_local_time'], md5, suffix
     )
+    
+    if len(logfilename) > name_length_limit:
+        # Keep run_id, md5, and suffix, truncate command_line_args
+        logfilename = "{}-{}-{}{}".format(
+            config["run_id"], config['run_local_time'], md5, suffix
+        )
+        remaining_space = name_length_limit - len(logfilename)
+        if remaining_space > 0:
+            command_line_args = command_line_args[:remaining_space]
+            logfilename = "{}-{}-{}-{}{}".format(
+                config["run_id"], command_line_args, config['run_local_time'], md5, suffix
+            )
+    
     return logfilename
 
 
