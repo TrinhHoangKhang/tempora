@@ -343,12 +343,12 @@ class RPGTokenizer(AbstractTokenizer):
         else:
             input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(
                 item_seq=item_seq[-(max_item_seq_len+1):],
-                pad_labels=True
+                pad_labels=False
             )
             return {
                 'input_ids': [input_ids],
                 'attention_mask': [attention_mask],
-                'labels': [labels],
+                'labels': [labels[-1:]],
                 'seq_lens': [seq_lens]
             }
 
