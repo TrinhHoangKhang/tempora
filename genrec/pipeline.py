@@ -97,6 +97,30 @@ class Pipeline:
             collate_fn=self.tokenizer.collate_fn['test']
         )
 
+        # ========= DEBUGGING ==========
+        # Print out the content of one batch of train dataloader
+        print("CURRENT POSITION: Pipeline.run() - After creating dataloaders, before training")
+        for batch in train_dataloader:
+            self.log("One batch of train dataloader:")
+            for key in batch:
+                self.log(f"{key}: {batch[key]}")
+            break
+        
+        for batch in val_dataloader:
+            self.log("One batch of val dataloader:")
+            for key in batch:
+                self.log(f"{key}: {batch[key]}")
+            break
+        
+        for batch in test_dataloader:
+            self.log("One batch of test dataloader:")
+            for key in batch:
+                self.log(f"{key}: {batch[key]}")
+            break
+        
+        assert False, "Stop after printing one batch of each dataloader for debugging purposes."
+        # ==============================
+        
         best_epoch, best_val_score = self.trainer.fit(train_dataloader, val_dataloader)
 
         self.accelerator.wait_for_everyone()
