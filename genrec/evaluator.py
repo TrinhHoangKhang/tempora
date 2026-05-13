@@ -12,33 +12,35 @@ class Evaluator:
 
         self.eos_token = self.tokenizer.eos_token
         self.maxk = max(config['topk'])
-        self.debug_flag = False
+        self.debug_flag = True
         
     def calculate_pos_index(self, preds, labels):
         preds = preds.detach().cpu()
         labels = labels.detach().cpu()
+        
+        # Debug
+        if self.debug_flag:
+            print(f"DEBUG FROM EVALUATOR.CALCULATE_POS_INDEX():")
+            print(f"preds.shape: {preds.shape}, labels.shape: {labels.shape}")
+            self.debug_flag = False
+            
+        '''
+        preds: (B, n_return_sequences=maxk)
+        labels: (B, 1)
+        pos_index: (B, maxk) boolean tensor indicating whether each prediction is correct
+        '''
         assert preds.shape[1] == self.maxk, f"preds.shape[1] = {preds.shape[1]} != {self.maxk}"
         
         pos_index = torch.zeros((preds.shape[0], self.maxk), dtype=torch.bool)
         for i in range(preds.shape[0]):
-            cur_label = labels[i].tolist()
-            
-            # DEBUG
-            if cur_label[0] > 5000 and self.debug_flag:
-                print("BATCH UNKNOWN")
-                print(f"DEBUG for example {i} of batch:")
-                print(f"  Original label: {labels[i].tolist()}")
-                print(f"  Processed label (after removing EOS): {cur_label}")
-                print(f"  Predictions: {preds[i].tolist()}")
-                self.debug_flag = False
+            cur_label = labels[i].tolist() # [123]
                  
-            if self.eos_token in cur_label:
-                eos_pos = cur_label.index(self.eos_token)
-                cur_label = cur_label[:eos_pos]
+            # if self.eos_token in cur_label:
+            #     eos_pos = cur_label.index(self.eos_token)
+            #     cur_label = cur_label[:eos_pos]
                 
             for j in range(self.maxk):
-                cur_pred = preds[i, j].tolist()
-
+                cur_pred = preds[i, j].tolist() # [122]
                 if cur_pred == cur_label:
                     pos_index[i, j] = True
                     break
