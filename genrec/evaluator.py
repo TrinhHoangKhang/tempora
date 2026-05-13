@@ -22,6 +22,7 @@ class Evaluator:
         if self.debug_flag:
             print(f"DEBUG FROM EVALUATOR.CALCULATE_POS_INDEX():")
             print(f"preds.shape: {preds.shape}, labels.shape: {labels.shape}")
+            print(f"labels[0]: {labels[0].tolist()}")
             self.debug_flag = False
             
         '''
