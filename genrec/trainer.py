@@ -128,7 +128,7 @@ class Trainer:
                 all_results = self.evaluate(val_dataloader, split='val')
                 if self.accelerator.is_main_process:
                     for key in all_results:
-                        if key != 'n_visited_items' and key != 'val_loss':
+                        if key != 'val_loss':
                             self.accelerator.log({f"Val_Metric/{key}": all_results[key]}, step=epoch + 1)
                         if key == 'val_loss':
                             self.accelerator.log({f"Loss/val_loss": all_results[key]}, step=epoch + 1)
@@ -196,9 +196,9 @@ class Trainer:
                 
                 # ===== Calculate validation loss =====
                 # Forward pass with loss computation (gradients not tracked due to torch.no_grad())
-                output = self.model(batch, return_loss=True)
-                val_loss = output.loss
-                all_results['val_loss'].append(val_loss.detach().cpu())
+                # output = self.model(batch, return_loss=True)
+                # val_loss = output.loss
+                # all_results['val_loss'].append(val_loss.detach().cpu())
                 
 
         # ============ Aggregate Results Across All Batches ============
@@ -209,7 +209,7 @@ class Trainer:
                 key = f"{metric}@{k}"
                 output_results[key] = torch.cat(all_results[key]).mean().item()
         output_results['n_visited_items'] = torch.cat(all_results['n_visited_items']).mean().item()
-        output_results['val_loss'] = torch.cat(all_results['val_loss']).mean().item()
+        # output_results['val_loss'] = torch.cat(all_results['val_loss']).mean().item()
         return output_results
 
     def case_evaluate(self, dataloader, split='test'):
