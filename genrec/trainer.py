@@ -51,6 +51,8 @@ class Trainer:
             get_file_name(self.config, suffix='.pth')
         )
         os.makedirs(os.path.dirname(self.saved_model_ckpt), exist_ok=True)
+        
+        self.debug_flag = True
 
     def fit(self, train_dataloader, val_dataloader):
         """
@@ -177,9 +179,9 @@ class Trainer:
             with torch.no_grad():
                 batch = {k: v.to(self.accelerator.device) for k, v in batch.items()}
                 
-                # ===== Calculate ranking metrics (recall, ndcg) =====
+                # ===== Calculate ranking metrics (recall, ndcg) and validation loss =====
                 if self.config['use_ddp']: # ddp, gather data from all devices for evaluation
-                    preds = self.model.module.generate(batch, n_return_sequences=self.evaluator.maxk)
+                    preds, val_loss = self.model.module.generate(batch, n_return_sequences=self.evaluator.maxk, return_loss=True)
                     if isinstance(preds, tuple):
                         preds, n_visited_items = preds
                         all_preds, all_labels, all_n_visited_items = self.accelerator.gather_for_metrics((preds, batch['labels'], n_visited_items))
@@ -188,17 +190,14 @@ class Trainer:
                         all_preds, all_labels = self.accelerator.gather_for_metrics((preds, batch['labels']))
                     results = self.evaluator.calculate_metrics(all_preds, all_labels)
                 else:
-                    preds = self.model.generate(batch, n_return_sequences=self.evaluator.maxk)
+                    preds, val_loss = self.model.generate(batch, n_return_sequences=self.evaluator.maxk, return_loss=True)
                     results = self.evaluator.calculate_metrics(preds, batch['labels'])
 
                 for key, value in results.items():
                     all_results[key].append(value)
                 
-                # ===== Calculate validation loss =====
-                # Forward pass with loss computation (gradients not tracked due to torch.no_grad())
-                output = self.model(batch, return_loss=True)
-                val_loss = output.loss
-                all_results['val_loss'].append(val_loss.detach().cpu())
+                # Store validation loss (unsqueeze to make it 1-dimensional for concatenation)
+                all_results['val_loss'].append(val_loss.detach().cpu().unsqueeze(0))
                 
 
         # ============ Aggregate Results Across All Batches ============

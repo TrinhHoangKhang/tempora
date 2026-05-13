@@ -262,10 +262,20 @@ class RPG(AbstractModel):
         visited_counts = torch.FloatTensor([[len(visited_nodes[batch_id])] for batch_id in range(batch_size)])
         return topk_nodes_sorted[:,:n_return_sequences].unsqueeze(-1), visited_counts
 
-    def generate(self, batch, n_return_sequences=1):
-        """Predict next items. Use graph search if generate_w_decoding_graph=True, else direct top-k."""
+    def generate(self, batch, n_return_sequences=1, return_loss=False):
+        """Predict next items. Use graph search if generate_w_decoding_graph=True, else direct top-k.
+        
+        Args:
+            batch: Input batch
+            n_return_sequences: Number of top items to return
+            return_loss: If True, also return validation loss
+        
+        Returns:
+            preds: Predicted item IDs
+            loss (optional): Validation loss if return_loss=True
+        """
         # Forward pass
-        outputs = self.forward(batch, return_loss=False)
+        outputs = self.forward(batch, return_loss=return_loss)
         
         # Extract last state and normalize
         states = outputs.final_states.gather(
@@ -289,7 +299,7 @@ class RPG(AbstractModel):
             if not self.init_flag:
                 self.init_graph()
                 self.init_flag = True
-            return self.graph_propagation(token_logits=token_logits, n_return_sequences=n_return_sequences)
+            preds = self.graph_propagation(token_logits=token_logits, n_return_sequences=n_return_sequences)
         else:
             # Direct greedy decoding
             item_logits = torch.gather(
@@ -298,4 +308,9 @@ class RPG(AbstractModel):
                 index=(self.item_id2tokens[1:,:] - 1).unsqueeze(0).expand(token_logits.shape[0], -1, -1)
             ).mean(dim=-1)
             preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
-            return preds.unsqueeze(-1)
+            preds = preds.unsqueeze(-1)
+        
+        if return_loss:
+            return preds, outputs.loss
+        else:
+            return preds

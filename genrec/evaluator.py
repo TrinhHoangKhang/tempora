@@ -12,7 +12,7 @@ class Evaluator:
 
         self.eos_token = self.tokenizer.eos_token
         self.maxk = max(config['topk'])
-        self.debug_flag = True
+        self.debug_flag = False
         
     def calculate_pos_index(self, preds, labels):
         preds = preds.detach().cpu()
