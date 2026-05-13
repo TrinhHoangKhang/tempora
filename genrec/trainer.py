@@ -194,6 +194,9 @@ class Trainer:
                 for key, value in results.items():
                     all_results[key].append(value)
                 
+                print("DEBUG FROM TRAINER.EVALUATE():")
+                for key, value in results.items():
+                    print(f"  {key}: {value}")
                 # ===== Calculate validation loss =====
                 # Forward pass with loss computation (gradients not tracked due to torch.no_grad())
                 # output = self.model(batch, return_loss=True)
@@ -210,6 +213,7 @@ class Trainer:
                 output_results[key] = torch.cat(all_results[key]).mean().item()
         output_results['n_visited_items'] = torch.cat(all_results['n_visited_items']).mean().item()
         # output_results['val_loss'] = torch.cat(all_results['val_loss']).mean().item()
+        print(f"OUTPUT RESULTS FROM TRAINER.EVALUATE(): {output_results}")
         return output_results
 
     def case_evaluate(self, dataloader, split='test'):
