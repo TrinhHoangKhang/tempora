@@ -128,7 +128,10 @@ class Trainer:
                 all_results = self.evaluate(val_dataloader, split='val')
                 if self.accelerator.is_main_process:
                     for key in all_results:
-                        self.accelerator.log({f"Val_Metric/{key}": all_results[key]}, step=epoch + 1)
+                        if key != 'n_visited_items' and key != 'val_loss':
+                            self.accelerator.log({f"Val_Metric/{key}": all_results[key]}, step=epoch + 1)
+                        if key == 'val_loss':
+                            self.accelerator.log({f"Loss/val_loss": all_results[key]}, step=epoch + 1)
                     self.log(f'[Epoch {epoch + 1}] Val Results: {all_results}')
                 val_score = all_results[self.config['val_metric']]
                 # Save model if validation score improves
