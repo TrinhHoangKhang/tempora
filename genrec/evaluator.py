@@ -71,4 +71,8 @@ class Evaluator:
             for k in self.config['topk']:
                 results[f"{metric}@{k}"] = self.metric2func[metric](pos_index, k)
         results['n_visited_items'] = n_visited_items
+        
+        print("RESULTS:")
+        for key, value in results.items():
+            print(f"  {key}: {value}")  
         return results
