@@ -211,6 +211,11 @@ class Trainer:
             for k in self.config['topk']:
                 key = f"{metric}@{k}"
                 output_results[key] = torch.cat(all_results[key]).mean().item()
+                if key == 'ndcg@10':
+                    self.log(f"DEBUG: all_results[key]: {all_results[key]}")
+                    self.log(f"DEBUG: {key} values for all batches: {torch.cat(all_results[key])}")
+                    self.log(f"DEBUG: Mean {key} across all batches: {output_results[key]}")
+                    
         output_results['n_visited_items'] = torch.cat(all_results['n_visited_items']).mean().item()
         # output_results['val_loss'] = torch.cat(all_results['val_loss']).mean().item()
         print(f"OUTPUT RESULTS FROM TRAINER.EVALUATE(): {output_results}")
