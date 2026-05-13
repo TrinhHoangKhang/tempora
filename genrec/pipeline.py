@@ -97,6 +97,24 @@ class Pipeline:
             collate_fn=self.tokenizer.collate_fn['test']
         )
 
+        # debug
+        for batch in train_dataloader:
+            print("Content of a training batch:")
+            for key, value in batch.items():
+                print(f"{key}: {value}")
+            break  # Only print the first batch for debugging
+        
+        for batch in val_dataloader:
+            print("Content of a validation batch:")
+            for key, value in batch.items():
+                print(f"{key}: {value}")
+            break  # Only print the first batch for debugging
+        
+        for batch in test_dataloader:
+            print("Content of a test batch:")
+            for key, value in batch.items():
+                print(f"{key}: {value}")
+            break  # Only print the first batch for debugging
         
         best_epoch, best_val_score = self.trainer.fit(train_dataloader, val_dataloader)
 
@@ -130,7 +148,7 @@ class Pipeline:
     def log(self, message, level='info'):
         return log(message, self.config['accelerator'], self.logger, level=level)
     
-# ========= Content of each batch in each dataloader ==========
+# ========= Content of each batch in each dataloader (OLD)==========
         '''
         All three have 4 keys: 
         - input_ids: shape (batch_size, seq_len), values are item ids 
