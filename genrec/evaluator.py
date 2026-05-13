@@ -17,31 +17,41 @@ class Evaluator:
     def calculate_pos_index(self, preds, labels):
         preds = preds.detach().cpu()
         labels = labels.detach().cpu()
-        labels = labels.max(dim=1)
+        
+        # Extract true labels: labels shape is (B, max_seq_len) with -100 as padding
+        # Find the non-padding label for each example
+        label_mask = labels != -100
+        true_labels = []
+        for i in range(labels.shape[0]):
+            valid_idx = torch.where(label_mask[i])[0]
+            if len(valid_idx) > 0:
+                # Take the last valid label (the actual target)
+                true_labels.append(labels[i, valid_idx[-1]].item())
+            else:
+                # Fallback if no valid label found
+                true_labels.append(-100)
+        true_labels = torch.tensor(true_labels)
+        
         # Debug
         if self.debug_flag:
             print(f"DEBUG FROM EVALUATOR.CALCULATE_POS_INDEX():")
-            print(f"preds.shape: {preds.shape}, labels.shape: {labels.shape}")
-            print(f"labels[0]: {labels[0].tolist()}")
+            print(f"preds.shape: {preds.shape}, true_labels.shape: {true_labels.shape}")
+            print(f"true_labels[0]: {true_labels[0].tolist()}")
             self.debug_flag = False
             
         '''
         preds: (B, n_return_sequences=maxk)
-        labels: (B, 1)
+        true_labels: (B,) - single true label per example
         pos_index: (B, maxk) boolean tensor indicating whether each prediction is correct
         '''
         assert preds.shape[1] == self.maxk, f"preds.shape[1] = {preds.shape[1]} != {self.maxk}"
         
         pos_index = torch.zeros((preds.shape[0], self.maxk), dtype=torch.bool)
         for i in range(preds.shape[0]):
-            cur_label = labels[i].tolist() # [123]
-                 
-            # if self.eos_token in cur_label:
-            #     eos_pos = cur_label.index(self.eos_token)
-            #     cur_label = cur_label[:eos_pos]
+            cur_label = true_labels[i].item()
                 
             for j in range(self.maxk):
-                cur_pred = preds[i, j].tolist() # [122]
+                cur_pred = preds[i, j].item()
                 if cur_pred == cur_label:
                     pos_index[i, j] = True
                     break
