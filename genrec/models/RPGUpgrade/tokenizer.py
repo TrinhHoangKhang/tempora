@@ -180,7 +180,8 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         self.opq_rotation = R.astype(np.float32)  # (d, d)
 
         # --- PQ codebooks ---
-        ivf_pq = faiss.extract_index_ivf(faiss.downcast_index(index.index))
+        ivf_index = faiss.extract_index_ivf(faiss.downcast_index(index.index))
+        ivf_pq = faiss.downcast_index(ivf_index)
         centroids = faiss.vector_to_array(ivf_pq.pq.centroids)
         sub_dim = emb_dim // self.n_digit
         self.pq_codebooks = centroids.reshape(
