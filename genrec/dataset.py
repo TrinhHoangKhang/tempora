@@ -107,7 +107,17 @@ class AbstractDataset:
         datasets = {'train': {'user': [], 'item_seq': []},
                     'val': {'user': [], 'item_seq': []},
                     'test': {'user': [], 'item_seq': []}}
-        for user in self.all_item_seqs:
+
+        # Optionally subsample users for faster debugging/tuning.
+        # Keeps the most-active users so item coverage stays high.
+        users = list(self.all_item_seqs.keys())
+        n_subset = self.config.get('debug_subset_users', None)
+        if n_subset is not None:
+            users = sorted(users, key=lambda u: len(self.all_item_seqs[u]), reverse=True)
+            users = users[:n_subset]
+            self.log(f'[DATASET] debug_subset_users={n_subset}: using {len(users)} of {len(self.all_item_seqs)} users')
+
+        for user in users:
             datasets['test']['user'].append(user)
             datasets['test']['item_seq'].append(self.all_item_seqs[user])
             if len(self.all_item_seqs[user]) > 1:
