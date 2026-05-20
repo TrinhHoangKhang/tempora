@@ -1,4 +1,5 @@
 category: Sports_and_Outdoors
 metadata: none  # none / raw / sentence
 split: leave_one_out  # leave_one_out
-# debug_subset_users: 2000  # Uncomment to subsample N most-active users for fast iteration
+# debug_subset_users: 2000  # Uncomment to subsample N users for fast iteration
+# debug_min_seq_len: 5      # Min interactions per user when subsampling (default: 5)

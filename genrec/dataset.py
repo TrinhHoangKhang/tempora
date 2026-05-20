@@ -110,13 +110,20 @@ class AbstractDataset:
                     'test': {'user': [], 'item_seq': []}}
 
         # Optionally subsample users for faster debugging/tuning.
-        # Uses a fixed random seed so results are reproducible and unbiased.
+        # Filters to users with enough interactions first, then randomly samples.
+        # min_seq_len=5 ensures every user contributes at least 3 training labels.
         users = list(self.all_item_seqs.keys())
         n_subset = self.config.get('debug_subset_users', None)
         if n_subset is not None:
+            min_seq_len = self.config.get('debug_min_seq_len', 5)
+            eligible = [u for u in users if len(self.all_item_seqs[u]) >= min_seq_len]
             rng = np.random.default_rng(seed=42)
-            users = rng.choice(users, size=min(n_subset, len(users)), replace=False).tolist()
-            self.log(f'[DATASET] debug_subset_users={n_subset}: using {len(users)} of {len(self.all_item_seqs)} users (random sample, seed=42)')
+            sampled = rng.choice(eligible, size=min(n_subset, len(eligible)), replace=False).tolist()
+            users = sampled
+            self.log(
+                f'[DATASET] debug_subset_users={n_subset} (min_seq_len≥{min_seq_len}): '
+                f'{len(eligible)} eligible → using {len(users)} of {len(self.all_item_seqs)} total users'
+            )
 
         for user in users:
             datasets['test']['user'].append(user)
