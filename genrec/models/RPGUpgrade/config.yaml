@@ -51,4 +51,5 @@ num_workers: 64
 #   Uncomment and change if you want a different output dimension.
 # dpq_v_dim: 14
 quantizer_temperature: 1.0
-min_quantizer_temperature: 0.01
+min_quantizer_temperature: 0.1
+quantizer_temperature_decay: 0.9

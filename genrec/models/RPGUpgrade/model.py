@@ -270,8 +270,10 @@ class RPGUpgrade(AbstractModel):
         self.n_edges = config['n_edges']
         self.propagation_steps = config['propagation_steps']
 
-        # Gumbel temperature (caller may anneal this during training)
+        # Gumbel temperature – annealed each epoch via anneal_tau()
         self.gumbel_tau: float = config.get('quantizer_temperature', 1.0)
+        self.gumbel_tau_min: float = config.get('min_quantizer_temperature', 0.1)
+        self.gumbel_tau_decay: float = config.get('quantizer_temperature_decay', 0.9)
 
     # ------------------------------------------------------------------
     # Helpers

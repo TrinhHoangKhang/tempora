@@ -124,6 +124,12 @@ class Trainer:
             self.accelerator.log({"Loss/train_loss": total_loss / len(train_dataloader)}, step=epoch + 1)
             self.log(f'[Epoch {epoch + 1}] Train Loss: {total_loss / len(train_dataloader)}')
 
+            # Anneal Gumbel-Softmax temperature if the model supports it
+            model_for_anneal = self.accelerator.unwrap_model(self.model) if self.config.get('use_ddp') else self.model
+            if hasattr(model_for_anneal, 'anneal_tau'):
+                model_for_anneal.anneal_tau()
+                self.log(f'[Epoch {epoch + 1}] Gumbel τ → {model_for_anneal.gumbel_tau:.4f}')
+
             # ===== Validation Phase =====
             # Evaluate on validation set at specified intervals
             if (epoch + 1) % self.config['eval_interval'] == 0:
