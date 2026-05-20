@@ -298,9 +298,6 @@ class RPGUpgrade(AbstractModel):
             f'#Total trainable:  {total}\n'
         )
 
-    # ------------------------------------------------------------------
-    # Forward
-    # ------------------------------------------------------------------
 
     def forward(self, batch: dict, return_loss: bool = True):
         """
@@ -362,10 +359,6 @@ class RPGUpgrade(AbstractModel):
             outputs.loss = torch.mean(torch.stack(losses))
 
         return outputs
-
-    # ------------------------------------------------------------------
-    # Generate  (identical logic to RPG)
-    # ------------------------------------------------------------------
 
     def generate(self, batch: dict, n_return_sequences: int = 1, return_loss: bool = False):
         """
