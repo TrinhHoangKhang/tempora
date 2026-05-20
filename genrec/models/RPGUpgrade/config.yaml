@@ -36,10 +36,10 @@ faiss_omp_num_threads: 32
 
 # RPG configs
 #   model
-temperature: 0.07
-num_beams: 50
-n_edges: 50
-propagation_steps: 3
+temperature: 0.03 # Beauty
+num_beams: 20 # Beauty
+n_edges: 200 # Beauty
+propagation_steps: 3 # Beauty 
 #   decoding graph construction
 chunk_size: 1024
 num_workers: 64
