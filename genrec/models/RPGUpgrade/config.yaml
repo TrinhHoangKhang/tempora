@@ -44,8 +44,11 @@ propagation_steps: 3
 chunk_size: 1024
 num_workers: 64
 
-# OPTIMIZED: Gumbel-Softmax learnable quantization configs
-use_gumbel_softmax: True
+# DPQ configs
+#   dpq_v_dim: Value vector dimension per subspace.
+#   Default (commented out) = n_embd // n_codebook = 448 // 32 = 14,
+#   which makes DPQ output exactly n_embd with no projection layer needed.
+#   Uncomment and change if you want a different output dimension.
+# dpq_v_dim: 14
 quantizer_temperature: 1.0
-temperature_annealing: True
 min_quantizer_temperature: 0.01
