@@ -110,16 +110,37 @@ class AbstractDataset:
                     'test': {'user': [], 'item_seq': []}}
 
         # Optionally subsample users for faster debugging/tuning.
+        # Stratifies by sequence length so short/medium/long sequences are
+        # all equally represented — avoids the bias of pure random sampling.
         users = list(self.all_item_seqs.keys())
         n_subset = self.config.get('debug_subset_users', None)
-        # debug 
-        print('Min seq len: {}, Max seq len: {}'.format(
-            min([len(self.all_item_seqs[u]) for u in users]),
-            max([len(self.all_item_seqs[u]) for u in users])
-        ))
-        
         if n_subset is not None:
-            pass
+            n_buckets = self.config.get('debug_n_buckets', 10)
+            rng = np.random.default_rng(seed=42)
+
+            # Sort users by sequence length and divide into equal-width buckets
+            users_sorted = sorted(users, key=lambda u: len(self.all_item_seqs[u]))
+            bucket_size = max(1, len(users_sorted) // n_buckets)
+            buckets = [users_sorted[i:i + bucket_size] for i in range(0, len(users_sorted), bucket_size)]
+
+            # Sample evenly from each bucket; carry remainder to last bucket
+            per_bucket = n_subset // len(buckets)
+            sampled = []
+            for bucket in buckets:
+                k = min(per_bucket, len(bucket))
+                sampled.extend(rng.choice(bucket, size=k, replace=False).tolist())
+            # Top up to exactly n_subset if rounding left us short
+            remaining = [u for u in users if u not in set(sampled)]
+            shortfall = n_subset - len(sampled)
+            if shortfall > 0 and remaining:
+                sampled.extend(rng.choice(remaining, size=min(shortfall, len(remaining)), replace=False).tolist())
+            users = sampled
+
+            seq_lens = [len(self.all_item_seqs[u]) for u in users]
+            self.log(
+                f'[DATASET] debug_subset_users={n_subset}: using {len(users)} users '
+                f'(stratified, seq_len min={min(seq_lens)} avg={sum(seq_lens)/len(seq_lens):.1f} max={max(seq_lens)})'
+            )
 
         for user in users:
             datasets['test']['user'].append(user)
