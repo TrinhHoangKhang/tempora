@@ -1,4 +1,5 @@
 from logging import getLogger
+import numpy as np
 from datasets import Dataset
 
 
@@ -109,13 +110,13 @@ class AbstractDataset:
                     'test': {'user': [], 'item_seq': []}}
 
         # Optionally subsample users for faster debugging/tuning.
-        # Keeps the most-active users so item coverage stays high.
+        # Uses a fixed random seed so results are reproducible and unbiased.
         users = list(self.all_item_seqs.keys())
         n_subset = self.config.get('debug_subset_users', None)
         if n_subset is not None:
-            users = sorted(users, key=lambda u: len(self.all_item_seqs[u]), reverse=True)
-            users = users[:n_subset]
-            self.log(f'[DATASET] debug_subset_users={n_subset}: using {len(users)} of {len(self.all_item_seqs)} users')
+            rng = np.random.default_rng(seed=42)
+            users = rng.choice(users, size=min(n_subset, len(users)), replace=False).tolist()
+            self.log(f'[DATASET] debug_subset_users={n_subset}: using {len(users)} of {len(self.all_item_seqs)} users (random sample, seed=42)')
 
         for user in users:
             datasets['test']['user'].append(user)
