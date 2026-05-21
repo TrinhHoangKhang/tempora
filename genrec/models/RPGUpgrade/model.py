@@ -229,6 +229,14 @@ class RPGUpgrade(AbstractModel):
             self.input_proj = nn.Identity()
 
         # ------------------------------------------------------------------
+        # Output projection: maps GPT-2 hidden states back to sent_emb space
+        # so that scoring is done against sent_emb_table (same space as input)
+        # ✅ This closes the input/output loop:
+        #    sent_emb_table → DPQ → GPT-2 → output_proj → score vs sent_emb_table
+        # ------------------------------------------------------------------
+        self.output_proj = nn.Linear(config['n_embd'], self.sent_emb_dim)
+
+        # ------------------------------------------------------------------
         # GPT-2 backbone
         # ------------------------------------------------------------------
         gpt2config = GPT2Config(
@@ -333,35 +341,28 @@ class RPGUpgrade(AbstractModel):
         )                                                       # (B, L, D, n_embd)
         outputs.final_states = final_states
 
-        # 5. Loss (identical to RPG)
+        # 5. Loss
         if return_loss:
             assert 'labels' in batch, 'Batch must contain labels.'
 
             label_mask = batch['labels'].view(-1) != -100
 
+            # (N_valid, D, n_embd) → mean over D heads → (N_valid, n_embd)
             selected = final_states.view(
                 -1, self.n_pred_head, self.config['n_embd']
-            )[label_mask]                                       # (N_valid, D, n_embd)
-            selected = F.normalize(selected, dim=-1)
-            selected = torch.chunk(selected, self.n_pred_head, dim=1)
+            )[label_mask].mean(dim=1)
 
-            token_emb = F.normalize(self.gpt2.wte.weight[1:-1], dim=-1)
-            token_embs = torch.chunk(token_emb, self.n_pred_head, dim=0)
+            # Project back to sentence embedding space and normalise
+            query = F.normalize(self.output_proj(selected), dim=-1)  # (N_valid, sent_emb_dim)
 
-            token_logits = [
-                torch.matmul(selected[i].squeeze(1), token_embs[i].T) / self.temperature
-                for i in range(self.n_pred_head)
-            ]
-            token_labels = self.item_id2tokens[batch['labels'].view(-1)[label_mask]]
+            # Score against ALL item sentence embeddings
+            # (padding row 0 excluded → indices are 1-based item IDs → 0-based for CE)
+            item_embs = F.normalize(self.sent_emb_table.weight[1:], dim=-1)  # (n_items-1, sent_emb_dim)
+            item_logits = query @ item_embs.T / self.temperature             # (N_valid, n_items-1)
 
-            losses = [
-                self.loss_fct(
-                    token_logits[i],
-                    token_labels[:, i] - i * self.config['codebook_size'] - 1,
-                )
-                for i in range(self.n_pred_head)
-            ]
-            outputs.loss = torch.mean(torch.stack(losses))
+            # Ground-truth: item IDs from labels, shifted to 0-based
+            gt_ids = batch['labels'].view(-1)[label_mask] - 1               # (N_valid,)
+            outputs.loss = nn.CrossEntropyLoss()(item_logits, gt_ids)
 
         return outputs
 
@@ -387,29 +388,16 @@ class RPGUpgrade(AbstractModel):
                 -1, 1, self.n_pred_head, self.config['n_embd']
             ),
         )                                                       # (B, 1, D, n_embd)
-        states = F.normalize(states, dim=-1)
 
-        token_emb = F.normalize(self.gpt2.wte.weight[1:-1], dim=-1)
-        token_embs = torch.chunk(token_emb, self.n_pred_head, dim=0)
+        # Mean over D heads → project back to sentence embedding space
+        query = self.output_proj(states[:, 0].mean(dim=1))     # (B, sent_emb_dim)
+        query = F.normalize(query, dim=-1)
 
-        logits = [
-            F.log_softmax(
-                torch.matmul(states[:, 0, i, :], token_embs[i].T) / self.temperature,
-                dim=-1,
-            )
-            for i in range(self.n_pred_head)
-        ]
-        token_logits = torch.cat(logits, dim=-1)               # (B, D * codebook_size)
+        # Score against ALL item sentence embeddings (same space as input)
+        item_embs = F.normalize(self.sent_emb_table.weight[1:], dim=-1)  # (n_items-1, sent_emb_dim)
+        item_logits = query @ item_embs.T / self.temperature             # (B, n_items-1)
 
-        # Score every item by summing log-probs across its 32 digits
-        item_logits = torch.gather(
-            input=token_logits.unsqueeze(-2).expand(-1, self.dataset.n_items, -1),
-            dim=-1,
-            index=(self.item_id2tokens[1:, :] - 1)
-                  .unsqueeze(0).expand(token_logits.shape[0], -1, -1),
-        ).mean(dim=-1)                                          # (B, n_items)
-
-        preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
+        preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1  # 1-based item IDs
         preds = preds.unsqueeze(-1)                             # (B, n_return_sequences, 1)
 
         if return_loss:
