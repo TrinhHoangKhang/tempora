@@ -198,11 +198,14 @@ class RPGUpgrade(AbstractModel):
         super().__init__(config, dataset, tokenizer)
 
         # ------------------------------------------------------------------
-        # Frozen sentence embedding table  (item_id → sent_emb)
+        # Sentence embedding table  (item_id → sent_emb)
+        # ⚙️  TOGGLE: set freeze=True to lock embeddings (original behaviour),
+        #             set freeze=False to allow fine-tuning during training.
         # ------------------------------------------------------------------
+        FREEZE_SENT_EMB = False   # ← change this line to switch behaviour
         sent_embs_tensor = torch.from_numpy(tokenizer.sent_embs)   # (n_items, d)
         self.sent_emb_table = nn.Embedding.from_pretrained(
-            sent_embs_tensor, freeze=True, padding_idx=0
+            sent_embs_tensor, freeze=FREEZE_SENT_EMB, padding_idx=0
         )
         self.sent_emb_dim: int = sent_embs_tensor.shape[1]         # d
 
