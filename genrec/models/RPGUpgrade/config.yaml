@@ -1,4 +1,5 @@
 # Upgraded version
+wandb_tags: [RPGUpgrade]
 metadata: sentence
 
 # Config the sentence embedding model

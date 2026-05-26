@@ -29,7 +29,7 @@ class Trainer:
         model (AbstractModel): The model to be trained.
         evaluator (Evaluator): The evaluator used for evaluating the model.
         logger (Logger): The logger used for logging training progress.
-        project_dir (str): The directory path for saving tensorboard logs.
+        project_dir (str): The directory path for saving experiment logs.
         accelerator (Accelerator): The accelerator used for distributed training
         saved_model_ckpt (str): The file path for saving the trained model checkpoint.
 
@@ -53,6 +53,19 @@ class Trainer:
         os.makedirs(os.path.dirname(self.saved_model_ckpt), exist_ok=True)
         
         self.debug_flag = True
+
+    def _get_wandb_init_kwargs(self) -> dict:
+        wandb_kwargs = {
+            "name": self.config.get("run_id") or get_file_name(self.config, suffix=''),
+            "group": f"{self.config['dataset']}/{self.config['model']}",
+        }
+        if self.config.get("wandb_entity"):
+            wandb_kwargs["entity"] = self.config["wandb_entity"]
+        if self.config.get("wandb_tags"):
+            wandb_kwargs["tags"] = self.config["wandb_tags"]
+        if self.config.get("wandb_notes"):
+            wandb_kwargs["notes"] = self.config["wandb_notes"]
+        return wandb_kwargs
 
     def fit(self, train_dataloader, val_dataloader):
         """
@@ -87,11 +100,12 @@ class Trainer:
         self.model, optimizer, train_dataloader, val_dataloader, scheduler = self.accelerator.prepare(
             self.model, optimizer, train_dataloader, val_dataloader, scheduler
         )
-        # ============ Initialize TensorBoard Logging ============
+        # ============ Initialize Weights & Biases Logging ============
+        project_name = self.config.get("wandb_project") or get_file_name(self.config, suffix='')
         self.accelerator.init_trackers(
-            project_name=get_file_name(self.config, suffix=''),
+            project_name=project_name,
             config=config_for_log(self.config),
-            init_kwargs={"tensorboard": {"flush_secs": 60}},
+            init_kwargs={"wandb": self._get_wandb_init_kwargs()},
         )
 
         n_epochs = np.ceil(total_n_steps / (len(train_dataloader) * self.accelerator.num_processes)).astype(int)

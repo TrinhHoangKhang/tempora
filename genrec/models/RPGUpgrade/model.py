@@ -229,12 +229,16 @@ class RPGUpgrade(AbstractModel):
             self.input_proj = nn.Identity()
 
         # ------------------------------------------------------------------
-        # Output projection: maps GPT-2 hidden states back to sent_emb space
-        # so that scoring is done against sent_emb_table (same space as input)
+        # Output projection: maps GPT-2 hidden states to DPQ reconstruction space
+        # so that scoring is done against DPQ(all items) — exact same space as input
         # ✅ This closes the input/output loop:
-        #    sent_emb_table → DPQ → GPT-2 → output_proj → score vs sent_emb_table
+        #    sent_emb_table → DPQ → GPT-2 → output_proj → score vs DPQ(sent_emb_table)
+        # By default dpq_out_dim == n_embd, so this is just nn.Identity (no extra params)
         # ------------------------------------------------------------------
-        self.output_proj = nn.Linear(config['n_embd'], self.sent_emb_dim)
+        if dpq_out_dim != config['n_embd']:
+            self.output_proj: nn.Module = nn.Linear(config['n_embd'], dpq_out_dim)
+        else:
+            self.output_proj = nn.Identity()
 
         # ------------------------------------------------------------------
         # GPT-2 backbone
@@ -352,12 +356,14 @@ class RPGUpgrade(AbstractModel):
                 -1, self.n_pred_head, self.config['n_embd']
             )[label_mask].mean(dim=1)
 
-            # Project back to sentence embedding space and normalise
-            query = F.normalize(self.output_proj(selected), dim=-1)  # (N_valid, sent_emb_dim)
+            # Project to DPQ reconstruction space and normalise
+            query = F.normalize(self.output_proj(selected), dim=-1)  # (N_valid, dpq_out_dim)
 
-            # Score against ALL item sentence embeddings
-            # (padding row 0 excluded → indices are 1-based item IDs → 0-based for CE)
-            item_embs = F.normalize(self.sent_emb_table.weight[1:], dim=-1)  # (n_items-1, sent_emb_dim)
+            # Score against DPQ hard-reconstruction of ALL items
+            # DPQ expects (B, L, d); wrap all item embeddings as (1, n_items-1, d)
+            all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
+            item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
+            item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
             item_logits = query @ item_embs.T / self.temperature             # (N_valid, n_items-1)
 
             # Ground-truth: item IDs from labels, shifted to 0-based
@@ -389,12 +395,14 @@ class RPGUpgrade(AbstractModel):
             ),
         )                                                       # (B, 1, D, n_embd)
 
-        # Mean over D heads → project back to sentence embedding space
-        query = self.output_proj(states[:, 0].mean(dim=1))     # (B, sent_emb_dim)
+        # Mean over D heads → project to DPQ reconstruction space
+        query = self.output_proj(states[:, 0].mean(dim=1))     # (B, dpq_out_dim)
         query = F.normalize(query, dim=-1)
 
-        # Score against ALL item sentence embeddings (same space as input)
-        item_embs = F.normalize(self.sent_emb_table.weight[1:], dim=-1)  # (n_items-1, sent_emb_dim)
+        # Score against DPQ hard-reconstruction of ALL items (same space as input)
+        all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
+        item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
+        item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
         item_logits = query @ item_embs.T / self.temperature             # (B, n_items-1)
 
         preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1  # 1-based item IDs

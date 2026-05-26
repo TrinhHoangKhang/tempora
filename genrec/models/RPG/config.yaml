@@ -1,4 +1,5 @@
 # Overwritting configs
+wandb_tags: [RPG]
 metadata: sentence
 
 # Config the sentence embedding model

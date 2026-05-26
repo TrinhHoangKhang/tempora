@@ -35,11 +35,11 @@ class Pipeline:
 
         # Accelerator
         self.project_dir = os.path.join(
-            self.config['tensorboard_log_dir'],
+            self.config['wandb_log_dir'],
             self.config["dataset"],
             self.config["model"]
         )
-        self.accelerator = Accelerator(log_with='tensorboard', project_dir=self.project_dir)
+        self.accelerator = Accelerator(log_with='wandb', project_dir=self.project_dir)
         self.config['accelerator'] = self.accelerator
 
         # Seed and Logger
