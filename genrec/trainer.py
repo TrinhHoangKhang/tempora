@@ -143,6 +143,11 @@ class Trainer:
             if hasattr(model_for_anneal, 'anneal_tau'):
                 model_for_anneal.anneal_tau()
                 self.log(f'[Epoch {epoch + 1}] Gumbel τ → {model_for_anneal.gumbel_tau:.4f}')
+            if hasattr(model_for_anneal, 'gumbel_tau'):
+                self.accelerator.log(
+                    {"Quantizer/gumbel_tau": float(model_for_anneal.gumbel_tau)},
+                    step=epoch + 1
+                )
 
             # ===== Validation Phase =====
             # Evaluate on validation set at specified intervals

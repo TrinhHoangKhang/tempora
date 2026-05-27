@@ -315,6 +315,13 @@ class RPGUpgrade(AbstractModel):
         self.gumbel_tau_min: float = config.get('min_quantizer_temperature', 0.1)
         self.gumbel_tau_decay: float = config.get('quantizer_temperature_decay', 0.9)
 
+    def anneal_tau(self):
+        """Exponential decay with floor: tau <- max(tau_min, tau * tau_decay)."""
+        self.gumbel_tau = max(
+            self.gumbel_tau_min,
+            self.gumbel_tau * self.gumbel_tau_decay,
+        )
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
