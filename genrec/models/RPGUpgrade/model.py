@@ -96,6 +96,14 @@ class DPQ(nn.Module):
 
     def forward(self, x: torch.Tensor, tau: float = 1.0) -> dict:
         """
+        Notation used below:
+            B : batch size
+            L : sequence length
+            d : full sentence embedding dim
+            D : number of PQ subspaces
+            K : number of clusters per subspace (n_clusters)
+            v : value dimension per subspace (v_dim)
+
         Args:
             x   : (B, L, d) sentence embeddings
             tau : Gumbel-Softmax temperature (lower = harder assignments)
@@ -108,17 +116,26 @@ class DPQ(nn.Module):
         """
         B, L, _ = x.shape
 
-        # 1. Rotate
+        # 1) Rotate from original sentence-embedding space to PQ-aligned space.
+        #    Input : x      (B, L, d)
+        #    Output: x_rot  (B, L, d)
         x_rot = self.rotation(x)                              # (B, L, d)
 
-        # 2. Split into D subspaces
+        # 2) Split each d-dim vector into D independent sub-vectors.
+        #    Input : x_rot  (B, L, d)
+        #    Output: x_sub  (B, L, D, sub_dim) where sub_dim = d // D
         x_sub = x_rot.view(B, L, self.D, self.sub_dim)       # (B, L, D, sub_dim)
 
-        # 3. Similarity logits against Key codebooks
-        # x_sub: (B, L, D, sub_dim)  K: (D, n_clusters, sub_dim)
+        # 3) Compute assignment logits to each cluster center per subspace.
+        #    x_sub   : (B, L, D, sub_dim)
+        #    self.K  : (D, K, sub_dim)
+        #    logits  : (B, L, D, K)
         logits = torch.einsum('bldi,dki->bldk', x_sub, self.K)  # (B, L, D, n_clusters)
 
-        # 4. Gumbel-Softmax during training; plain softmax during inference
+        # 4) Turn logits into soft assignment probabilities.
+        #    - train: add Gumbel noise for differentiable categorical sampling
+        #    - eval : deterministic softmax
+        #    soft_probs: (B, L, D, K), each last-dim slice sums to 1
         if self.training:
             gumbel = -torch.log(
                 -torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10
@@ -127,22 +144,30 @@ class DPQ(nn.Module):
         else:
             soft_probs = F.softmax(logits / tau, dim=-1)      # (B, L, D, n_clusters)
 
-        # 5. Hard codes (no gradient)
+        # 5) Hard assignment (argmax over K clusters) for each (B, L, D) position.
+        #    codes: (B, L, D), dtype long, no gradient through argmax.
         codes = logits.argmax(dim=-1)                         # (B, L, D)
 
-        # 6. Hard reconstruction: index into V
-        #    V: (D, n_clusters, v_dim) → expand to (B, L, D, n_clusters, v_dim)
+        # 6) Hard reconstruction by gathering the selected row from value codebook V.
+        #    self.V : (D, K, v)
+        #    V_exp  : (B, L, D, K, v)  (broadcast view for gather)
+        #    idx    : (B, L, D, 1, v)  (indices expanded along value dim)
+        #    hard   : (B, L, D, v)
         V_exp = self.V.unsqueeze(0).unsqueeze(0).expand(B, L, -1, -1, -1)
         idx = codes.unsqueeze(-1).unsqueeze(-1).expand(B, L, self.D, 1, self.v_dim)
         hard = V_exp.gather(dim=3, index=idx).squeeze(3)     # (B, L, D, v_dim)
 
-        # 7. Soft reconstruction: weighted sum of V rows
+        # 7) Soft reconstruction using weighted average of all K codewords.
+        #    soft_probs: (B, L, D, K), self.V: (D, K, v) -> soft: (B, L, D, v)
         soft = torch.einsum('bldk,dkv->bldv', soft_probs, self.V)  # (B, L, D, v_dim)
 
-        # 8. Straight-Through Estimator
+        # 8) Straight-Through Estimator:
+        #    forward value equals hard, backward gradient flows through soft.
+        #    ste: (B, L, D, v)
         ste = hard + soft - soft.detach()                     # (B, L, D, v_dim)
 
-        # 9. Flatten subspace dimension
+        # 9) Flatten (D, v) -> (D * v) to produce GPT-facing token embeddings.
+        #    Each returned tensor has shape (B, L, D * v).
         return {
             'ste':   ste.reshape(B, L, self.D * self.v_dim),
             'soft':  soft.reshape(B, L, self.D * self.v_dim),
@@ -304,6 +329,99 @@ class RPGUpgrade(AbstractModel):
             item_id2tokens[item_id] = torch.LongTensor(self.tokenizer.item2tokens[item])
         return item_id2tokens
 
+    def _get_all_item_embs(self) -> torch.Tensor:
+        """
+        Return normalized DPQ hard-reconstructed embeddings for all real items.
+
+        Returns:
+            item_embs: (n_items - 1, dpq_out_dim), item id 1..n_items-1 maps to row 0..n_items-2.
+        """
+        all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
+        item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
+        return F.normalize(item_embs.squeeze(0), dim=-1)                 # (n_items-1, dpq_out_dim)
+
+    def build_ii_sim_mat(self) -> torch.Tensor:
+        """
+        Build item-item similarity matrix from DPQ hard embeddings.
+
+        Similarity is cosine in DPQ space (dot product after L2 normalization),
+        then mapped from [-1, 1] to [0, 1] for consistency with RPG graph init.
+        """
+        n_items = self.dataset.n_items
+        item_embs = self._get_all_item_embs()  # (n_items-1, dpq_out_dim), ids 1.. map to rows 0..
+        item_item_sim = torch.zeros(
+            (n_items, n_items), device=item_embs.device, dtype=torch.float32
+        )
+
+        for i_start in range(1, n_items, self.chunk_size):
+            i_end = min(i_start + self.chunk_size, n_items)
+            emb_i = item_embs[i_start - 1:i_end - 1]  # (bi, dpq_out_dim)
+
+            for j_start in range(1, n_items, self.chunk_size):
+                j_end = min(j_start + self.chunk_size, n_items)
+                emb_j = item_embs[j_start - 1:j_end - 1]  # (bj, dpq_out_dim)
+
+                sims = emb_i @ emb_j.T                   # (bi, bj), cosine due to normalization
+                sims_01 = 0.5 * (sims + 1.0)             # map [-1, 1] -> [0, 1]
+                item_item_sim[i_start:i_end, j_start:j_end] = sims_01
+
+        return item_item_sim
+
+    def build_adjacency_list(self, item_item_sim: torch.Tensor) -> torch.Tensor:
+        """Find top-k nearest neighbors for each item."""
+        return torch.topk(item_item_sim, k=self.n_edges, dim=-1).indices
+
+    def init_graph(self):
+        """Initialize k-NN graph for graph-constrained decoding."""
+        self.tokenizer.log("Building item-item similarity matrix...")
+        item_item_sim = self.build_ii_sim_mat()
+        self.adjacency = self.build_adjacency_list(item_item_sim)
+        self.tokenizer.log("Graph initialized.")
+
+    def graph_propagation(self, item_logits: torch.Tensor, n_return_sequences: int):
+        """
+        Graph-based decoding in item space.
+
+        Args:
+            item_logits: (B, n_items-1), scores for item ids 1..n_items-1
+            n_return_sequences: number of final candidates to return
+        """
+        batch_size = item_logits.shape[0]
+        visited_nodes = {batch_id: set() for batch_id in range(batch_size)}
+
+        # Random beam initialization in valid item-id range [1, n_items-1].
+        topk_nodes_sorted = torch.randint(
+            1, self.dataset.n_items,
+            (batch_size, self.num_beams),
+            dtype=torch.long,
+            device=item_logits.device,
+        )
+
+        for batch_id in range(batch_size):
+            for node in topk_nodes_sorted[batch_id].detach().cpu().tolist():
+                visited_nodes[batch_id].add(node)
+
+        # Iterative expansion + local reranking with DPQ item logits.
+        for _ in range(self.propagation_steps):
+            all_neighbors = self.adjacency[topk_nodes_sorted].view(batch_size, -1)
+            next_nodes = []
+            for batch_id in range(batch_size):
+                neighbors_in_batch = torch.unique(all_neighbors[batch_id])
+                for node in neighbors_in_batch.detach().cpu().tolist():
+                    visited_nodes[batch_id].add(node)
+
+                # item_logits columns are 0-based for item ids 1..n_items-1.
+                scores = item_logits[batch_id].index_select(0, neighbors_in_batch - 1)
+                idxs = torch.topk(scores, self.num_beams).indices
+                next_nodes.append(neighbors_in_batch[idxs])
+
+            topk_nodes_sorted = torch.stack(next_nodes, dim=0)
+
+        visited_counts = torch.FloatTensor(
+            [[len(visited_nodes[batch_id])] for batch_id in range(batch_size)]
+        )
+        return topk_nodes_sorted[:, :n_return_sequences].unsqueeze(-1), visited_counts
+
     @property
     def n_parameters(self) -> str:
         total   = sum(p.numel() for p in self.parameters()      if p.requires_grad)
@@ -318,26 +436,44 @@ class RPGUpgrade(AbstractModel):
 
     def forward(self, batch: dict, return_loss: bool = True):
         """
+        Symbols:
+            B : batch size
+            L : sequence length
+            d : sentence embedding dimension
+            E : GPT hidden dimension (config['n_embd'])
+            H : number of prediction heads (= tokenizer.n_digit)
+            M : number of valid training positions in this batch (label != -100)
+            I : number of real items (= n_items - 1, excluding padding id 0)
+
         1. Look up frozen sentence embeddings for each item in the sequence.
         2. Pass through DPQ → STE output feeds into GPT-2.
         3. Apply prediction heads.
         4. Optionally compute cross-entropy loss over labeled positions.
         """
 
-        # 1. Frozen sentence embeddings
+        # 1) Item id lookup.
+        #    batch['input_ids']: (B, L) integer item ids
+        #    sent_embs         : (B, L, d)
         sent_embs = self.sent_emb_table(batch['input_ids'])    # (B, L, d)
 
-        # 2. Differentiable quantization
+        # 2) Differentiable quantization + optional dimension projection.
+        #    dpq_out['ste']: (B, L, dpq_out_dim)
+        #    input_embs    : (B, L, E) after self.input_proj
         dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)     
         input_embs = self.input_proj(dpq_out['ste'])            # (B, L, n_embd)
 
-        # 3. GPT-2 encoding
+        # 3) GPT-2 contextual encoding.
+        #    inputs_embeds          : (B, L, E)
+        #    attention_mask         : (B, L) (1=keep, 0=masked)
+        #    outputs.last_hidden_state: (B, L, E)
         outputs = self.gpt2(
             inputs_embeds=input_embs,
             attention_mask=batch['attention_mask'],
         )
 
-        # 4. Prediction heads  (n_pred_head × ResBlock)
+        # 4) Run H residual prediction heads in parallel over GPT hidden states.
+        #    per-head output: (B, L, E)
+        #    stack along head axis -> final_states: (B, L, H, E)
         final_states = torch.cat(
             [self.pred_heads[i](outputs.last_hidden_state).unsqueeze(-2)
              for i in range(self.n_pred_head)],
@@ -349,24 +485,35 @@ class RPGUpgrade(AbstractModel):
         if return_loss:
             assert 'labels' in batch, 'Batch must contain labels.'
 
+            # labels: (B, L) with -100 at ignore positions (padding / no supervision)
+            # label_mask (flattened): (B*L,) bool
             label_mask = batch['labels'].view(-1) != -100
 
-            # (N_valid, D, n_embd) → mean over D heads → (N_valid, n_embd)
+            # Flatten token axis and keep only supervised positions:
+            # final_states reshape : (B*L, H, E)
+            # after mask selection : (M, H, E)
+            # average over H heads : (M, E)
             selected = final_states.view(
                 -1, self.n_pred_head, self.config['n_embd']
             )[label_mask].mean(dim=1)
 
-            # Project to DPQ reconstruction space and normalise
+            # Project model states into DPQ retrieval space and L2-normalize.
+            # query: (M, dpq_out_dim)
             query = F.normalize(self.output_proj(selected), dim=-1)  # (N_valid, dpq_out_dim)
 
-            # Score against DPQ hard-reconstruction of ALL items
-            # DPQ expects (B, L, d); wrap all item embeddings as (1, n_items-1, d)
+            # Build candidate matrix from ALL item sentence embeddings:
+            # sent_emb_table.weight[1:] removes padding id 0.
+            # all_sent : (1, I, d) because DPQ expects shape (B, L, d).
             all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
+            # item_embs after DPQ hard reconstruction: (1, I, dpq_out_dim)
+            # squeeze batch axis -> (I, dpq_out_dim), then normalize for cosine scoring
             item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
             item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
+            # Dense retrieval scores: (M, dpq_out_dim) @ (dpq_out_dim, I) -> (M, I)
             item_logits = query @ item_embs.T / self.temperature             # (N_valid, n_items-1)
 
-            # Ground-truth: item IDs from labels, shifted to 0-based
+            # CrossEntropy expects class ids in [0, I-1]; subtract 1 to remove padding offset.
+            # gt_ids: (M,)
             gt_ids = batch['labels'].view(-1)[label_mask] - 1               # (N_valid,)
             outputs.loss = nn.CrossEntropyLoss()(item_logits, gt_ids)
 
@@ -374,7 +521,7 @@ class RPGUpgrade(AbstractModel):
 
     def generate(self, batch: dict, n_return_sequences: int = 1, return_loss: bool = False):
         """
-        Predict top-k next items.
+        Predict next items.
 
         Args:
             batch               : Input batch dict.
@@ -387,7 +534,10 @@ class RPGUpgrade(AbstractModel):
         """
         outputs = self.forward(batch, return_loss=return_loss)
 
-        # Extract hidden state at the last valid position for each example
+        # Gather final hidden state at each sample's last valid timestep:
+        # outputs.final_states        : (B, L, H, E)
+        # (batch['seq_lens'] - 1)     : (B,) index of each sequence end
+        # gathered states             : (B, 1, H, E)
         states = outputs.final_states.gather(
             dim=1,
             index=(batch['seq_lens'] - 1).view(-1, 1, 1, 1).expand(
@@ -395,18 +545,32 @@ class RPGUpgrade(AbstractModel):
             ),
         )                                                       # (B, 1, D, n_embd)
 
-        # Mean over D heads → project to DPQ reconstruction space
+        # Mean over H heads, project to retrieval space, and normalize:
+        # states[:, 0]   : (B, H, E)
+        # mean(dim=1)    : (B, E)
+        # query          : (B, dpq_out_dim)
         query = self.output_proj(states[:, 0].mean(dim=1))     # (B, dpq_out_dim)
         query = F.normalize(query, dim=-1)
 
-        # Score against DPQ hard-reconstruction of ALL items (same space as input)
-        all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
-        item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
-        item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
+        # Build and normalize candidate item embeddings in the same DPQ space.
+        # item_embs      : (I, dpq_out_dim)
+        item_embs = self._get_all_item_embs()
+        # Similarity scores over all items: (B, dpq_out_dim) @ (dpq_out_dim, I) -> (B, I)
         item_logits = query @ item_embs.T / self.temperature             # (B, n_items-1)
 
-        preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1  # 1-based item IDs
-        preds = preds.unsqueeze(-1)                             # (B, n_return_sequences, 1)
+        # Decode with optional graph constraint (same switch semantics as RPG).
+        if self.generate_w_decoding_graph:
+            if not self.init_flag:
+                self.init_graph()
+                self.init_flag = True
+            preds = self.graph_propagation(
+                item_logits=item_logits,
+                n_return_sequences=n_return_sequences,
+            )
+        else:
+            # topk indices are 0-based over [0, I-1], add +1 to map back to item ids.
+            preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1  # 1-based item IDs
+            preds = preds.unsqueeze(-1)                             # (B, n_return_sequences, 1)
 
         if return_loss:
             return preds, outputs.loss
