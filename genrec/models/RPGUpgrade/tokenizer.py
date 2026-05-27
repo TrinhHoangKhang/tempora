@@ -36,6 +36,7 @@ class RPGUpgradeTokenizer(RPGTokenizer):
             dataset.cache_dir, 'processed',
             f'{os.path.basename(self.config["sent_emb_model"])}.sent_emb'
         )
+        # If SENTENCE EMBEDDINGS CACHE does not exist, generate it.
         if os.path.exists(sent_emb_path):
             self.log('[TOKENIZER] Loading sentence embeddings...')
             sent_embs = np.fromfile(sent_emb_path, dtype=np.float32).reshape(
@@ -45,6 +46,7 @@ class RPGUpgradeTokenizer(RPGTokenizer):
             self.log('[TOKENIZER] Encoding sentence embeddings...')
             sent_embs = self._encode_sent_emb(dataset, sent_emb_path)
 
+        # Apply PCA if configured
         if self.config['sent_emb_pca'] > 0:
             self.log('[TOKENIZER] Applying PCA...')
             from sklearn.decomposition import PCA
@@ -61,14 +63,16 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         # ------------------------------------------------------------------
         # 2. Build OPQ index if not already cached (also saves .faiss)
         # ------------------------------------------------------------------
+        # If SEMANTIC_IDS CACHE does not exist, generate it.
         if not os.path.exists(sem_ids_path):
+            # CACHE DONT EXIST -> GENERATE SEMANTIC IDS AND SAVE FAISS INDEX.
             self.log(f'[TOKENIZER] Embeddings shape: {sent_embs.shape}')
             training_item_mask = self._get_items_for_training(dataset)
             self._generate_semantic_id_opq_and_save_index(
                 sent_embs, sem_ids_path, index_path, training_item_mask
             )
         elif not os.path.exists(index_path):
-            # sem_ids exist (created by RPGTokenizer) but .faiss was not saved – re-build
+            # sem_ids CACHE exist but .faiss was not saved – re-build
             self.log('[TOKENIZER] FAISS index not found alongside .sem_ids; re-building...')
             training_item_mask = self._get_items_for_training(dataset)
             self._generate_semantic_id_opq_and_save_index(
@@ -90,13 +94,15 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         # ------------------------------------------------------------------
         # 4. Load semantic IDs (same as parent)
         # ------------------------------------------------------------------
+        # LOAD SEMANTIC IDS FROM CACHE.
         self.log('[TOKENIZER] Loading semantic IDs...')
         item2sem_ids = json.load(open(sem_ids_path, 'r'))
+        # CONVERT SEMANTIC IDS TO TOKENS.
         item2tokens = self._sem_ids_to_tokens(item2sem_ids)
         return item2tokens
 
     # ------------------------------------------------------------------
-    # Helper: build OPQ index, save .faiss and optionally .sem_ids
+    # Build OPQ index, save .faiss and optionally .sem_ids
     # ------------------------------------------------------------------
     def _generate_semantic_id_opq_and_save_index(
         self, sent_embs, sem_ids_path, index_path, train_mask, skip_sem_ids=False

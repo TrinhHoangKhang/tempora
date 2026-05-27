@@ -239,18 +239,22 @@ class RPGTokenizer(AbstractTokenizer):
         return item2sem_ids
 
     def _init_tokenizer(self, dataset: AbstractDataset):
-        """Load or generate semantic IDs for items."""
+        """
+        Load or generate semantic IDs for items.
+        Return a item2tokens dictionary.
+        """
         sem_ids_path = os.path.join(
             dataset.cache_dir, 'processed',
             f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.sem_ids'
         )
 
+        # If SEMANTIC_IDS CACHE does not exist, generate it.
         if not os.path.exists(sem_ids_path):
-            # Load or encode sentence embeddings
             sent_emb_path = os.path.join(
                 dataset.cache_dir, 'processed',
                 f'{os.path.basename(self.config["sent_emb_model"])}.sent_emb'
             )
+             # If SENTENCE EMBEDDINGS CACHE does not exist, generate it.
             if os.path.exists(sent_emb_path):
                 self.log(f'[TOKENIZER] Loading sentence embeddings...')
                 sent_embs = np.fromfile(sent_emb_path, dtype=np.float32).reshape(-1, self.config['sent_emb_dim'])
@@ -269,8 +273,10 @@ class RPGTokenizer(AbstractTokenizer):
             training_item_mask = self._get_items_for_training(dataset)
             self._generate_semantic_id_opq(sent_embs, sem_ids_path, training_item_mask)
 
+        # LOAD SEMANTIC IDS FROM CACHE.
         self.log(f'[TOKENIZER] Loading semantic IDs...')
         item2sem_ids = json.load(open(sem_ids_path, 'r'))
+        # CONVERT SEMANTIC IDS TO TOKENS.
         item2tokens = self._sem_ids_to_tokens(item2sem_ids)
         return item2tokens
 

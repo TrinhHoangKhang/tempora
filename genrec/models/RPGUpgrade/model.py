@@ -231,7 +231,7 @@ class RPGUpgrade(AbstractModel):
         # ------------------------------------------------------------------
         # Output projection: maps GPT-2 hidden states to DPQ reconstruction space
         # so that scoring is done against DPQ(all items) — exact same space as input
-        # ✅ This closes the input/output loop:
+        #   This closes the input/output loop:
         #    sent_emb_table → DPQ → GPT-2 → output_proj → score vs DPQ(sent_emb_table)
         # By default dpq_out_dim == n_embd, so this is just nn.Identity (no extra params)
         # ------------------------------------------------------------------
@@ -328,7 +328,7 @@ class RPGUpgrade(AbstractModel):
         sent_embs = self.sent_emb_table(batch['input_ids'])    # (B, L, d)
 
         # 2. Differentiable quantization
-        dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)
+        dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)     
         input_embs = self.input_proj(dpq_out['ste'])            # (B, L, n_embd)
 
         # 3. GPT-2 encoding
