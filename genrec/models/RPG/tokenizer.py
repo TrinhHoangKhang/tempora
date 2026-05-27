@@ -313,6 +313,18 @@ class RPGTokenizer(AbstractTokenizer):
         
         # TRAINING mode: create multiple examples via sliding window
         if split == 'train':
+            if not self.config.get('use_sliding_window', True):
+                input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(
+                    item_seq=item_seq[-(max_item_seq_len + 1):],
+                    pad_labels=True,
+                )
+                return {
+                    'input_ids': [input_ids],
+                    'attention_mask': [attention_mask],
+                    'labels': [labels],
+                    'seq_lens': [seq_lens],
+                }
+
             n_return_examples = max(len(item_seq) - max_item_seq_len, 1)
 
             # First example using all items up to max_len+1

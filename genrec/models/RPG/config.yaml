@@ -15,6 +15,9 @@ openai_api_key: ~
 
 sent_emb_batch_size: 512
 
+# Training data: if false, train uses the last window only (same as val/test)
+use_sliding_window: True
+
 # Config for the backbone model
 max_item_seq_len: 50
 n_embd: 448
