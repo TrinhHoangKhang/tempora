@@ -80,6 +80,9 @@ class Pipeline:
         self.log(self.model.n_parameters)
 
         # Trainer
+        self.log("==================================================================")
+        self.log("===================== CREATING TRAINER OBJECT ====================")
+        self.log("==================================================================")
         if trainer is not None:
             self.trainer = trainer
         else:
