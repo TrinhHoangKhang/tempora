@@ -158,8 +158,8 @@ class AbstractDataset:
 
         self.log(
             f'[DATASET] Split info: '
-            f'train: {len(datasets["train"]["user"])} users, {len(datasets["train"]["item_seq"])} item sequences'
-            f'val: {len(datasets["val"]["user"])} users, {len(datasets["val"]["item_seq"])} item sequences'
+            f'train: {len(datasets["train"]["user"])} users, {len(datasets["train"]["item_seq"])} item sequences\n'
+            f'val: {len(datasets["val"]["user"])} users, {len(datasets["val"]["item_seq"])} item sequences\n'
             f'test: {len(datasets["test"]["user"])} users, {len(datasets["test"]["item_seq"])} item sequences'
         )
         self.log('[DATASET] Converting splits to HuggingFace Dataset objects...')
