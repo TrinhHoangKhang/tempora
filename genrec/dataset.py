@@ -105,6 +105,8 @@ class AbstractDataset:
                   Each dataset is represented as a dictionary with 'user' and 'item_seq' keys.
                   The 'user' key contains a list of users, and the 'item_seq' key contains a list of item sequences.
         """
+        self.log('[DATASET] Building leave-one-out train/val/test splits...')
+
         datasets = {'train': {'user': [], 'item_seq': []},
                     'val': {'user': [], 'item_seq': []},
                     'test': {'user': [], 'item_seq': []}}
@@ -141,6 +143,8 @@ class AbstractDataset:
                 f'[DATASET] debug_subset_users={n_subset}: using {len(users)} users '
                 f'(stratified, seq_len min={min(seq_lens)} avg={sum(seq_lens)/len(seq_lens):.1f} max={max(seq_lens)})'
             )
+        else:
+            self.log(f'[DATASET] Using all {len(users)} users for split')
 
         for user in users:
             datasets['test']['user'].append(user)
@@ -151,6 +155,14 @@ class AbstractDataset:
             if len(self.all_item_seqs[user]) > 2:
                 datasets['train']['user'].append(user)
                 datasets['train']['item_seq'].append(self.all_item_seqs[user][:-2])
+
+        self.log(
+            f'[DATASET] Split sizes (users): '
+            f'train={len(datasets["train"]["user"])}, '
+            f'val={len(datasets["val"]["user"])}, '
+            f'test={len(datasets["test"]["user"])}'
+        )
+        self.log('[DATASET] Converting splits to HuggingFace Dataset objects...')
         for split in datasets:
             datasets[split] = Dataset.from_dict(datasets[split])
         return datasets
@@ -163,15 +175,20 @@ class AbstractDataset:
             datasets (dict): A dictionary containing the train and test datasets.
         """
         if self.split_data is not None:
+            self.log('[DATASET] Using cached train/val/test splits')
             return self.split_data
 
         split_strategy = self.config['split']
+        self.log(f'[DATASET] Split strategy: {split_strategy}')
         if split_strategy in ['leave_one_out', 'last_out']:
             datasets = self._leave_one_out()
         else:
             raise NotImplementedError(f'Split strategy [{split_strategy}] not implemented.')
 
         self.split_data = datasets
+        self.log('[DATASET] ========== Split complete ==========')
+        for split_name in ('train', 'val', 'test'):
+            self.log(f'[DATASET]   {split_name}: {len(self.split_data[split_name])} users')
         return self.split_data
 
     def log(self, message, level='info'):

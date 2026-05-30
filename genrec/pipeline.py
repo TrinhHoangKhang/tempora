@@ -54,6 +54,10 @@ class Pipeline:
         self.log("=================================================================")
         self.raw_dataset = get_dataset(dataset_name)(self.config)
         self.log(self.raw_dataset)
+        self.log("-----------------------------------------------------------------")
+        self.log('=================================================================')
+        self.log('=================== SPLITTING DATASET... ========================')
+        self.log('=================================================================')
         self.split_datasets = self.raw_dataset.split()
         self.log("-----------------------------------------------------------------")
 
@@ -66,6 +70,10 @@ class Pipeline:
         else:
             assert isinstance(model_name, str), 'Tokenizer must be provided if model_name is not a string.'
             self.tokenizer = get_tokenizer(model_name)(self.config, self.raw_dataset)
+        self.log("-----------------------------------------------------------------")
+        self.log('=================================================================')
+        self.log('=============== TOKENIZING SPLITED DATASET... ===================')
+        self.log('=================================================================')
         self.tokenized_datasets = self.tokenizer.tokenize(self.split_datasets)
         self.log("-----------------------------------------------------------------")
         
