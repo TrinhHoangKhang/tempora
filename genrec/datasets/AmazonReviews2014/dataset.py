@@ -417,7 +417,7 @@ class AmazonReviews2014(AbstractDataset):
         np.random.seed(12345)
 
         # Process raw data
-        self.log('[DATASET] ========== PROCESSING RAW DATA... ===========')
+        self.log('[DATASET] ============= PROCESSING RAW DATA... ==============')
         processed_data_path = os.path.join(self.cache_dir, 'processed')
         os.makedirs(processed_data_path, exist_ok=True)
 
