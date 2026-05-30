@@ -55,7 +55,7 @@ class Pipeline:
         self.raw_dataset = get_dataset(dataset_name)(self.config)
         self.log(self.raw_dataset)
         self.split_datasets = self.raw_dataset.split()
-        self.log("=================================================================")
+        self.log("-----------------------------------------------------------------")
 
         # Tokenizer
         self.log("=================================================================")
@@ -67,7 +67,7 @@ class Pipeline:
             assert isinstance(model_name, str), 'Tokenizer must be provided if model_name is not a string.'
             self.tokenizer = get_tokenizer(model_name)(self.config, self.raw_dataset)
         self.tokenized_datasets = self.tokenizer.tokenize(self.split_datasets)
-        self.log("=================================================================")
+        self.log("-----------------------------------------------------------------")
         
         # Model
         self.log("=================================================================")
@@ -80,7 +80,7 @@ class Pipeline:
                 self.log(f'Loaded model checkpoint from {checkpoint_path}')
         self.log(self.model)
         self.log(self.model.n_parameters)
-        self.log("=================================================================")
+        self.log("-----------------------------------------------------------------")
         
         # Trainer
         self.log("==================================================================")
@@ -90,7 +90,7 @@ class Pipeline:
             self.trainer = trainer
         else:
             self.trainer = get_trainer(model_name)(self.config, self.model, self.tokenizer)
-        self.log("=================================================================")
+        self.log("-----------------------------------------------------------------")
 
     def run(self):
         # DataLoader
@@ -113,19 +113,33 @@ class Pipeline:
             collate_fn=self.tokenizer.collate_fn['test']
         )
 
+        self.log("=================================================================")
+        self.log("===================== CALLING TRAINER.FIT =======================")
+        self.log("=================================================================")
         best_epoch, best_val_score = self.trainer.fit(train_dataloader, val_dataloader)
-
+        self.log("-----------------------------------------------------------------")
+        
         self.accelerator.wait_for_everyone()
         self.model = self.accelerator.unwrap_model(self.model)
+        
+        # Load best model checkpoint
+        self.log("=================================================================")
+        self.log("===================== LOADING BEST MODEL CHECKPOINT =============")
+        self.log("=================================================================")
         if self.checkpoint_path is None:
             self.model.load_state_dict(torch.load(self.trainer.saved_model_ckpt))
-
+        
         self.model, test_dataloader = self.accelerator.prepare(
             self.model, test_dataloader
         )
         if self.accelerator.is_main_process and self.checkpoint_path is None:
             self.log(f'Loaded best model checkpoint from {self.trainer.saved_model_ckpt}')
-
+        self.log("-----------------------------------------------------------------")
+        
+        # Prepare model for evaluation
+        self.log("=================================================================")
+        self.log("================== EVALUATING MODEL ON TEST SET ================")
+        self.log("=================================================================")
         # Enable graph-constrained decoding for model inference
         self.trainer.model.generate_w_decoding_graph = True
         test_results = self.trainer.evaluate(test_dataloader)
@@ -134,6 +148,7 @@ class Pipeline:
             for key in test_results:
                 self.accelerator.log({f'Test_Metric/{key}': test_results[key]})
         self.log(f'Test Results: {test_results}')
+        self.log("-----------------------------------------------------------------")
 
         self.trainer.end()
         return {
