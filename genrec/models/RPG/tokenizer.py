@@ -149,7 +149,7 @@ class RPGTokenizer(AbstractTokenizer):
         mask = np.zeros(dataset.n_items - 1, dtype=bool)
         for item in items_for_training:
             mask[dataset.item2id[item] - 1] = True
-        self.log(f"MASK DIMENSION: {mask.shape}")
+        self.log(f"[TOKENIZER] MASK DIMENSION: {mask.shape}")
         return mask
 
     def _generate_semantic_id_opq(self, sent_embs, sem_ids_path, train_mask):
