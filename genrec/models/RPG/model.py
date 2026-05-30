@@ -1,18 +1,7 @@
-"""
-RPG (Residual Quantization Product) Model for Sequential Recommendation
-
-This module implements a GPT-2 based recommendation model that:
-1. Represents each item as a product of 32 quantized codes (32-digit semantic ID)
-2. Uses GPT-2 to model sequential dependencies in user purchase history
-3. Predicts the next item by predicting all 32 digits in parallel
-4. Optionally uses graph-constrained decoding to ensure predictions are semantically valid
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2Config, GPT2Model
-
 from genrec.dataset import AbstractDataset
 from genrec.model import AbstractModel
 from genrec.tokenizer import AbstractTokenizer

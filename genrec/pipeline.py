@@ -49,11 +49,17 @@ class Pipeline:
         self.log(f'Device: {self.config["device"]}')
 
         # Dataset
+        self.log("=================================================================")
+        self.log("================= CREATING DATASET OBJECT =======================")
+        self.log("=================================================================")
         self.raw_dataset = get_dataset(dataset_name)(self.config)
         self.log(self.raw_dataset)
         self.split_datasets = self.raw_dataset.split()
 
         # Tokenizer
+        self.log("=================================================================")
+        self.log("================= CREATING TOKENIZER OBJECT =====================")
+        self.log("=================================================================")
         if tokenizer is not None:
             self.tokenizer = tokenizer(self.config, self.raw_dataset)
         else:
@@ -62,6 +68,9 @@ class Pipeline:
         self.tokenized_datasets = self.tokenizer.tokenize(self.split_datasets)
 
         # Model
+        self.log("=================================================================")
+        self.log("===================== CREATING MODEL OBJECT =====================")
+        self.log("=================================================================")
         with self.accelerator.main_process_first():
             self.model = get_model(model_name)(self.config, self.raw_dataset, self.tokenizer)
             if checkpoint_path is not None:
