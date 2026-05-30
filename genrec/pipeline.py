@@ -55,6 +55,7 @@ class Pipeline:
         self.raw_dataset = get_dataset(dataset_name)(self.config)
         self.log(self.raw_dataset)
         self.split_datasets = self.raw_dataset.split()
+        self.log("=================================================================")
 
         # Tokenizer
         self.log("=================================================================")
@@ -66,7 +67,8 @@ class Pipeline:
             assert isinstance(model_name, str), 'Tokenizer must be provided if model_name is not a string.'
             self.tokenizer = get_tokenizer(model_name)(self.config, self.raw_dataset)
         self.tokenized_datasets = self.tokenizer.tokenize(self.split_datasets)
-
+        self.log("=================================================================")
+        
         # Model
         self.log("=================================================================")
         self.log("===================== CREATING MODEL OBJECT =====================")
@@ -78,7 +80,8 @@ class Pipeline:
                 self.log(f'Loaded model checkpoint from {checkpoint_path}')
         self.log(self.model)
         self.log(self.model.n_parameters)
-
+        self.log("=================================================================")
+        
         # Trainer
         self.log("==================================================================")
         self.log("===================== CREATING TRAINER OBJECT ====================")
@@ -87,6 +90,7 @@ class Pipeline:
             self.trainer = trainer
         else:
             self.trainer = get_trainer(model_name)(self.config, self.model, self.tokenizer)
+        self.log("=================================================================")
 
     def run(self):
         # DataLoader
