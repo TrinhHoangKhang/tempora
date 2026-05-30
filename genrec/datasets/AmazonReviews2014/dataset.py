@@ -99,7 +99,9 @@ class AmazonReviews2014(AbstractDataset):
         base_name = os.path.basename(url)
         local_filepath = os.path.join(path, base_name)
         if not os.path.exists(local_filepath):
+            self.log(f'[DATASET] Downloading {type} from {url}...')
             download_file(url, local_filepath)
+            self.log(f'[DATASET] Downloaded {type} to {local_filepath}')
         else:
             self.log(f'[DATASET] Raw data file already exists: {local_filepath}')
         return local_filepath
@@ -136,6 +138,7 @@ class AmazonReviews2014(AbstractDataset):
             item = inter['asin']
             time = inter['unixReviewTime']
             reviews.append((user, item, int(time)))
+        self.log(f'[DATASET] Loaded {len(reviews)} reviews')
         return reviews
 
     def _get_item_seqs(self, reviews: list[tuple]) -> dict:
@@ -148,6 +151,7 @@ class AmazonReviews2014(AbstractDataset):
         Returns:
             dict: A dictionary where the keys are the users and the values are lists of items sorted by time.
         """
+        self.log('[DATASET] Grouping reviews by user and sorting by time...')
         # Group reviews by user
         item_seqs = defaultdict(list)
         for data in reviews:
@@ -158,6 +162,7 @@ class AmazonReviews2014(AbstractDataset):
         for user, item_time in item_seqs.items():
             item_time.sort(key=lambda x: x[1])
             item_seqs[user] = [_[0] for _ in item_time]
+        self.log(f'[DATASET] Built sequences for {len(item_seqs)} users')
         return item_seqs
 
     def _remap_ids(self, item_seqs: dict) -> tuple[dict, dict]:
@@ -190,6 +195,11 @@ class AmazonReviews2014(AbstractDataset):
                     self.id_mapping['id2item'].append(item)
                 iids.append(item)
             self.all_item_seqs[user] = iids
+        n_items = len(self.id_mapping['id2item']) - 1  # exclude padding
+        self.log(
+            f'[DATASET] Remapping complete: {len(self.all_item_seqs)} users, '
+            f'{n_items} items'
+        )
         return self.all_item_seqs, self.id_mapping
 
     def _process_reviews(self,
@@ -212,10 +222,17 @@ class AmazonReviews2014(AbstractDataset):
         id_mapping_file = os.path.join(output_path, 'id_mapping.json')
         if os.path.exists(seq_file) and os.path.exists(id_mapping_file):
             self.log('[DATASET] Reviews have been processed...')
+            self.log(f'[DATASET] Loading processed reviews from {seq_file}...')
+            self.log(f'[DATASET] Loading processed id mapping from {id_mapping_file}...')
             with open(seq_file, 'r') as f:
                 all_item_seqs = json.load(f)
             with open(id_mapping_file, 'r') as f:
                 id_mapping = json.load(f)
+            n_items = len(id_mapping['id2item']) - 1  # exclude padding
+            self.log(
+                f'[DATASET] Loaded {len(all_item_seqs)} user sequences, '
+                f'{n_items} items'
+            )
             return all_item_seqs, id_mapping
 
         self.log('[DATASET] Processing reviews...')
@@ -225,10 +242,17 @@ class AmazonReviews2014(AbstractDataset):
         item_seqs = self._get_item_seqs(reviews)
         all_item_seqs, id_mapping = self._remap_ids(item_seqs)
 
+        n_items = len(id_mapping['id2item']) - 1  # exclude padding
+        self.log(
+            f'[DATASET] Review processing complete: {len(all_item_seqs)} users, '
+            f'{n_items} items'
+        )
+
         # Save data
-        self.log('[DATASET] Saving mapping data...')
+        self.log(f'[DATASET] Saving item sequences to {seq_file}...')
         with open(seq_file, 'w') as f:
             json.dump(all_item_seqs, f)
+        self.log(f'[DATASET] Saving id mapping to {id_mapping_file}...')
         with open(id_mapping_file, 'w') as f:
             json.dump(id_mapping, f)
         return all_item_seqs, id_mapping
@@ -255,6 +279,7 @@ class AmazonReviews2014(AbstractDataset):
             if info['asin'] not in item_asins:
                 continue
             data[info['asin']] = info
+        self.log(f'[DATASET] Loaded metadata for {len(data)} items')
         return data
 
     def _sent_process(self, raw: str) -> str:
@@ -311,6 +336,7 @@ class AmazonReviews2014(AbstractDataset):
                 if feature in keys:
                     meta_sentence += self._sent_process(meta[feature])
             item2meta[item] = meta_sentence
+        self.log(f'[DATASET] Extracted meta sentences for {len(item2meta)} items')
         return item2meta
 
     def _process_meta(
@@ -335,13 +361,16 @@ class AmazonReviews2014(AbstractDataset):
         meta_file = os.path.join(output_path, f'metadata.{process_mode}.json')
         if os.path.exists(meta_file):
             self.log('[DATASET] Metadata has been processed...')
+            self.log(f'[DATASET] Loading processed metadata from {meta_file}...')
             with open(meta_file, 'r') as f:
-                return json.load(f)
+                item2meta = json.load(f)
+            self.log(f'[DATASET] Loaded metadata for {len(item2meta)} items')
+            return item2meta
 
         self.log(f'[DATASET] Processing metadata, mode: {process_mode}')
 
         if process_mode == 'none':
-            # No metadata processing required
+            self.log('[DATASET] Metadata processing disabled (mode: none)')
             return None
 
         item2meta = self._load_metadata(
@@ -356,8 +385,10 @@ class AmazonReviews2014(AbstractDataset):
         else:
             raise NotImplementedError('Metadata processing type not implemented.')
 
+        self.log(f'[DATASET] Saving metadata to {meta_file}...')
         with open(meta_file, 'w') as f:
             json.dump(item2meta, f)
+        self.log(f'[DATASET] Metadata processing complete ({len(item2meta)} items)')
         return item2meta
 
     def _download_and_process_raw(self):
@@ -405,3 +436,6 @@ class AmazonReviews2014(AbstractDataset):
             input_path=meta_localpath,
             output_path=processed_data_path
         )
+
+        self.log('[DATASET] ======== Raw data pipeline complete ========')
+        self.log(str(self))
