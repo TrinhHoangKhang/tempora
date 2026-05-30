@@ -131,7 +131,7 @@ class AmazonReviews2014(AbstractDataset):
         Returns:
             list: A list of tuples representing the reviews. Each tuple contains the user ID, item ID, and the interaction timestamp.
         """
-        self.log('[DATASET] Loading reviews...')
+        self.log('[DATASET] Loading reviews from {path}...')
         reviews = []
         for inter in self._parse_gz(path):
             user = inter['reviewerID']
@@ -162,7 +162,7 @@ class AmazonReviews2014(AbstractDataset):
         for user, item_time in item_seqs.items():
             item_time.sort(key=lambda x: x[1])
             item_seqs[user] = [_[0] for _ in item_time]
-        self.log(f'[DATASET] Built sequences for {len(item_seqs)} users')
+        self.log(f'[DATASET] successfully built sequences for {len(item_seqs)} users')
         return item_seqs
 
     def _remap_ids(self, item_seqs: dict) -> tuple[dict, dict]:
@@ -239,7 +239,9 @@ class AmazonReviews2014(AbstractDataset):
 
         # Load reviews
         reviews = self._load_reviews(input_path)
+        self.log(f'[DATASET] >> GET ITEM SEQUENCES...')
         item_seqs = self._get_item_seqs(reviews)
+        self.log(f'[DATASET] >> REMAP IDS...')
         all_item_seqs, id_mapping = self._remap_ids(item_seqs)
 
         n_items = len(id_mapping['id2item']) - 1  # exclude padding
@@ -402,7 +404,7 @@ class AmazonReviews2014(AbstractDataset):
             None
         """
         # Download raw data files
-        self.log('[DATASET] ==== Downloading raw data files... ====')
+        self.log('[DATASET] ========== DOWNLOADING RAW DATA FILES... ==========')
         raw_data_path = os.path.join(self.cache_dir, 'raw')
         os.makedirs(raw_data_path, exist_ok=True)
         with self.accelerator.main_process_first(): # only download once when ddp
@@ -421,21 +423,18 @@ class AmazonReviews2014(AbstractDataset):
         np.random.seed(12345)
 
         # Process raw data
-        self.log('[DATASET] ======== Processing raw data... =======')
+        self.log('[DATASET] ========== PROCESSING RAW DATA... ===========')
         processed_data_path = os.path.join(self.cache_dir, 'processed')
         os.makedirs(processed_data_path, exist_ok=True)
 
-        self.log('[DATASET] Attempting to process reviews...')
+        self.log('[DATASET] ========== PROCESS REVIEWS... ==========')
         self.all_item_seqs, self.id_mapping = self._process_reviews(
             input_path=reviews_localpath,
             output_path=processed_data_path
         )
 
-        self.log('[DATASET] Attempting to process metadata...')
+        self.log('[DATASET] ========== PROCESS METADATA... ==========')
         self.item2meta = self._process_meta(
             input_path=meta_localpath,
             output_path=processed_data_path
         )
-
-        self.log('[DATASET] ======== Raw data pipeline complete ========')
-        self.log(str(self))
