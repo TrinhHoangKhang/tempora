@@ -131,7 +131,7 @@ class AmazonReviews2014(AbstractDataset):
         Returns:
             list: A list of tuples representing the reviews. Each tuple contains the user ID, item ID, and the interaction timestamp.
         """
-        self.log('[DATASET] Loading reviews from {path}...')
+        self.log(f'[DATASET] Loading reviews from {path}...')
         reviews = []
         for inter in self._parse_gz(path):
             user = inter['reviewerID']
