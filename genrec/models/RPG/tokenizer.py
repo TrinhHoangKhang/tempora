@@ -140,7 +140,7 @@ class RPGTokenizer(AbstractTokenizer):
         Returns:
             np.ndarray: A boolean mask indicating which items are used for training.
         """
-        self.log(f'[TOKENIZER] ? Mark all the ID of all the items in the training set as True...')
+        self.log(f'[TOKENIZER] Marking all the IDs of all the items in the training set as True...')
         items_for_training = set()
         for item_seq in dataset.split_data['train']['item_seq']:
             for item in item_seq:
@@ -149,6 +149,7 @@ class RPGTokenizer(AbstractTokenizer):
         mask = np.zeros(dataset.n_items - 1, dtype=bool)
         for item in items_for_training:
             mask[dataset.item2id[item] - 1] = True
+        self.log(f"MASK DIMENSION: {mask.shape}")
         return mask
 
     def _generate_semantic_id_opq(self, sent_embs, sem_ids_path, train_mask):
