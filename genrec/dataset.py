@@ -195,9 +195,10 @@ class AbstractDataset:
             raise NotImplementedError(f'Split strategy [{split_strategy}] not implemented.')
 
         self.split_data = datasets
-        self.log('[DATASET] ========== Split complete ==========')
+        self.log('[DATASET] Split complete...')
+        self.log("CONTENT OF SPLIT_DATASET HUGGINGFACE DATASET OBJECTS:")
         for split_name in ('train', 'val', 'test'):
-            self.log(f'[DATASET]   {split_name}: {len(self.split_data[split_name])} users')
+            self.log(f"[DATASET] {split_name}: {self.split_data[split_name]}")
         return self.split_data
 
     def log(self, message, level='info'):
