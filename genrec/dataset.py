@@ -156,12 +156,21 @@ class AbstractDataset:
                 datasets['train']['user'].append(user)
                 datasets['train']['item_seq'].append(self.all_item_seqs[user][:-2])
 
-        self.log(
-            f'[DATASET] Split info: \n'
-            f'\ttrain: {len(datasets["train"]["user"])} users, {len(datasets["train"]["item_seq"])} item sequences\n'
-            f'\tval: {len(datasets["val"]["user"])} users, {len(datasets["val"]["item_seq"])} item sequences\n'
-            f'\ttest: {len(datasets["test"]["user"])} users, {len(datasets["test"]["item_seq"])} item sequences'
-        )
+        self.log('[DATASET] Split info:')
+        for split_name in ('train', 'val', 'test'):
+            split = datasets[split_name]
+            n_users = len(split['user'])
+            if n_users == 0:
+                self.log(f'[DATASET]   {split_name}: 0 users')
+                continue
+            seq_lens = [len(seq) for seq in split['item_seq']]
+            n_inters = sum(seq_lens)
+            avg_len = n_inters / n_users
+            self.log(
+                f'[DATASET]   {split_name}: {n_users} users, '
+                f'{n_inters} interactions, avg seq length {avg_len:.1f} '
+                f'(min={min(seq_lens)}, max={max(seq_lens)})'
+            )
         self.log('[DATASET] Converting splits to HuggingFace Dataset objects...')
         for split in datasets:
             datasets[split] = Dataset.from_dict(datasets[split])
