@@ -72,7 +72,8 @@ class RPGTokenizer(AbstractTokenizer):
         """Encode sentence embeddings and save to output_path."""
         assert self.config['metadata'] == 'sentence', \
             'Tokenizer only supports sentence metadata.'
-
+        self.log(f'[TOKENIZER] Encoding sentence embeddings with {self.config["sent_emb_model"]}...')
+        
         meta_sentences = [] 
         for i in range(1, dataset.n_items):
             meta_sentences.append(dataset.item2meta[dataset.id_mapping['id2item'][i]])
@@ -124,6 +125,8 @@ class RPGTokenizer(AbstractTokenizer):
                     sent_embs.append(response.embedding)
             sent_embs = np.array(sent_embs, dtype=np.float32)
 
+
+        self.log(f'[TOKENIZER] Saving sentence embeddings to {output_path}...')
         sent_embs.tofile(output_path)
         return sent_embs
 
@@ -137,6 +140,7 @@ class RPGTokenizer(AbstractTokenizer):
         Returns:
             np.ndarray: A boolean mask indicating which items are used for training.
         """
+        self.log(f'[TOKENIZER] ? Mark all the ID of all the items in the training set as True...')
         items_for_training = set()
         for item_seq in dataset.split_data['train']['item_seq']:
             for item in item_seq:
@@ -161,6 +165,7 @@ class RPGTokenizer(AbstractTokenizer):
         faiss.omp_set_num_threads(self.config['faiss_omp_num_threads'])
         
         # Create OPQ index
+        self.log(f'[TOKENIZER] Creating OPQ index with {self.index_factory}...')
         index = faiss.index_factory(
             sent_embs.shape[1],
             self.index_factory,
@@ -211,7 +216,7 @@ class RPGTokenizer(AbstractTokenizer):
             item = self.id2item[i + 1]
             item2sem_ids[item] = tuple(pq_codes[i].tolist())
         
-        self.log(f'[TOKENIZER] Saving semantic IDs to {sem_ids_path}...')
+        self.log(f'[TOKENIZER] Saving ITEM2SEM_IDS mapping to {sem_ids_path}...')
         with open(sem_ids_path, 'w') as f:
             json.dump(item2sem_ids, f)
 
@@ -225,6 +230,7 @@ class RPGTokenizer(AbstractTokenizer):
         Returns:
             dict: A dictionary mapping items to their corresponding tokens.
         """
+        self.log(f'[TOKENIZER] Converting semantic IDs to tokens...')
         for item in item2sem_ids:
             tokens = list(item2sem_ids[item])
             for digit in range(self.n_digit):
@@ -243,35 +249,48 @@ class RPGTokenizer(AbstractTokenizer):
         )
 
         # If SEMANTIC_IDS CACHE does not exist, generate it.
+        self.log(f'[TOKENIZER] ======= ATTTEMPTING TO GENERATE SEMANTIC IDS MAPPING... ========')
         if not os.path.exists(sem_ids_path):
+            self.log(f'[TOKENIZER] Semantic IDs mapping does not exist...')
             sent_emb_path = os.path.join(
                 dataset.cache_dir, 'processed',
                 f'{os.path.basename(self.config["sent_emb_model"])}.sent_emb'
             )
-             # If SENTENCE EMBEDDINGS CACHE does not exist, generate it.
+
+            self.log(f'[TOKENIZER] ======= 1. ATTTEMPTING TO GENERATE SENTENCE EMBEDDINGS ========')
             if os.path.exists(sent_emb_path):
-                self.log(f'[TOKENIZER] Loading sentence embeddings...')
+                self.log(f'[TOKENIZER] Sentence embeddings already exist in {sent_emb_path}')
+                self.log(f'[TOKENIZER] Loading sentence embeddings from {sent_emb_path}...')
                 sent_embs = np.fromfile(sent_emb_path, dtype=np.float32).reshape(-1, self.config['sent_emb_dim'])
             else:
-                self.log(f'[TOKENIZER] Encoding sentence embeddings...')
+                self.log(f'[TOKENIZER] Creating sentence embeddings...')
                 sent_embs = self._encode_sent_emb(dataset, sent_emb_path)
             
             # Apply PCA if configured
             if self.config['sent_emb_pca'] > 0:
-                self.log(f'[TOKENIZER] Applying PCA...')
+                self.log(f'[TOKENIZER] Applying PCA to sentence embeddings...')
+                self.log(f'[TOKENIZER] Embeddings shape before PCA: {sent_embs.shape}')
                 from sklearn.decomposition import PCA
                 pca = PCA(n_components=self.config['sent_emb_pca'], whiten=True)
                 sent_embs = pca.fit_transform(sent_embs)
             
-            self.log(f'[TOKENIZER] Embeddings shape: {sent_embs.shape}')
+            self.log(f'[TOKENIZER] Embeddings shape after PCA: {sent_embs.shape}')
+            
+            self.log(f'[TOKENIZER] ================== 2. GENERATE TRAINING ITEM MASK =============')
             training_item_mask = self._get_items_for_training(dataset)
+            
+            self.log(f'[TOKENIZER] ================== 3. GENERATE SEMANTIC IDS ===================')
             self._generate_semantic_id_opq(sent_embs, sem_ids_path, training_item_mask)
-
+        else:
+            self.log(f'[TOKENIZER] Semantic IDs mapping already exists in {sem_ids_path}')
+            
         # LOAD SEMANTIC IDS FROM CACHE.
-        self.log(f'[TOKENIZER] Loading semantic IDs...')
+        self.log(f'[TOKENIZER] =============== CREATING ITEM2TOKENS MAPPING... ==============')
+        self.log(f'[TOKENIZER] Loading ITEM2SEM_IDS mapping from {sem_ids_path}...')
         item2sem_ids = json.load(open(sem_ids_path, 'r'))
         # CONVERT SEMANTIC IDS TO TOKENS.
         item2tokens = self._sem_ids_to_tokens(item2sem_ids)
+        self.log(f'[TOKENIZER] Successfully created ITEM2TOKENS mapping...')
         return item2tokens
 
     def _tokenize_first_n_items(self, item_seq: list) -> tuple:
