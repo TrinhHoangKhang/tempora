@@ -100,6 +100,8 @@ class AmazonReviews2014(AbstractDataset):
         local_filepath = os.path.join(path, base_name)
         if not os.path.exists(local_filepath):
             download_file(url, local_filepath)
+        else:
+            self.log(f'[DATASET] Raw data file already exists: {local_filepath}')
         return local_filepath
 
     def _parse_gz(self, path: str):
@@ -369,13 +371,16 @@ class AmazonReviews2014(AbstractDataset):
             None
         """
         # Download raw data files
+        self.log('[DATASET] ==== Downloading raw data files... ====')
         raw_data_path = os.path.join(self.cache_dir, 'raw')
         os.makedirs(raw_data_path, exist_ok=True)
         with self.accelerator.main_process_first(): # only download once when ddp
+            self.log('[DATASET] Attempting to download reviews...')
             reviews_localpath = self._download_raw(
                 path=raw_data_path,
                 type='reviews'
             )
+            self.log('[DATASET] Attempting to download metadata...')
             meta_localpath = self._download_raw(
                 path=raw_data_path,
                 type='meta'
@@ -385,14 +390,17 @@ class AmazonReviews2014(AbstractDataset):
         np.random.seed(12345)
 
         # Process raw data
+        self.log('[DATASET] ======== Processing raw data... =======')
         processed_data_path = os.path.join(self.cache_dir, 'processed')
         os.makedirs(processed_data_path, exist_ok=True)
 
+        self.log('[DATASET] Attempting to process reviews...')
         self.all_item_seqs, self.id_mapping = self._process_reviews(
             input_path=reviews_localpath,
             output_path=processed_data_path
         )
 
+        self.log('[DATASET] Attempting to process metadata...')
         self.item2meta = self._process_meta(
             input_path=meta_localpath,
             output_path=processed_data_path
