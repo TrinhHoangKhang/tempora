@@ -501,13 +501,6 @@ class RPGTokenizer(AbstractTokenizer):
         for split in datasets:
             tokenized_datasets[split].set_format(type='torch')
 
-        self.log(
-            f'[TOKENIZER] Final dataset sizes (rows ready for DataLoader):\n'
-            + '\n'.join(
-                f'[TOKENIZER]   {split:5s}: {len(tokenized_datasets[split])} rows'
-                for split in tokenized_datasets
-            )
-        )
         # Showing the content of the tokenized datasets.
         for split in tokenized_datasets:
             self.log(f"[TOKENIZER] {split}: {tokenized_datasets[split]}")
