@@ -47,3 +47,7 @@ propagation_steps: 3 # Beauty
 #   decoding graph construction
 chunk_size: 1024
 num_workers: 64
+
+
+# DEBUG configs
+tokenizer_debug_n_examples: 0
