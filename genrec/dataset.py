@@ -201,9 +201,8 @@ class AbstractDataset:
         for split_name in ('train', 'val', 'test'):
             self.log(f"[DATASET] {split_name}: {self.split_data[split_name]}")
             
-        self.log("One example of each split:")
-        for split_name in ('train', 'val', 'test'):
-            self.log(f"[DATASET] {split_name}: {self.split_data[split_name][0]}")
+        self.log("[DATASET] ONE EXAMPLE: ")
+        self.log(f"[DATASET] {self.split_data['train'][0]}")
 
         return self.split_data
 
