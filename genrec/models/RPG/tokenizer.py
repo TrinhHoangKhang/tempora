@@ -505,7 +505,6 @@ class RPGTokenizer(AbstractTokenizer):
         self.log("[TOKENIZER] CONTENT OF TOKENIZED DATASETS:")
         for split in tokenized_datasets:
             self.log(f"[TOKENIZER] {split}: {tokenized_datasets[split]}")
-        self.log("[TOKENIZER] ONE EXAMPLE: ")
-        self.log(f"[TOKENIZER] {tokenized_datasets['train'][99]}")
+        self.log("[TOKENIZER] NOTE: input_ids and labels are now numeric ids, not ASIN")
             
         return tokenized_datasets
