@@ -1,1 +1,6 @@
 /sandbox
+/cache
+/ckpt
+/logs
+/wandb
+/figure
