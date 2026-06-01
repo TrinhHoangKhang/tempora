@@ -506,8 +506,6 @@ class RPGTokenizer(AbstractTokenizer):
         for split in tokenized_datasets:
             self.log(f"[TOKENIZER] {split}: {tokenized_datasets[split]}")
         self.log("[TOKENIZER] ONE EXAMPLE: ")
-        self.log(f"[TOKENIZER] {tokenized_datasets['train'][0]}")
-        self.log(f"[TOKENIZER] {tokenized_datasets['val'][0]}")
-        self.log(f"[TOKENIZER] {tokenized_datasets['test'][0]}")
+        self.log(f"[TOKENIZER] {tokenized_datasets['train'][99]}")
             
         return tokenized_datasets
