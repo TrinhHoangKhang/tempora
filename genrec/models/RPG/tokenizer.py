@@ -43,6 +43,12 @@ class RPGTokenizer(AbstractTokenizer):
         self.eos_token = self.n_digit * self.codebook_size + 1
         self.ignored_label = -100
 
+        # How many examples (per split) to print detailed window-level debug logs for.
+        # Set to 0 to disable. NOTE: with num_proc > 1 the counter lives in a subprocess
+        # so counts are per-worker and will exceed this value slightly — still useful.
+        self._debug_n_examples = config.get('tokenizer_debug_n_examples', 2)
+        self._debug_log_count = {'train': 0, 'val': 0, 'test': 0}
+
     @property
     def n_digit(self):
         """Number of product quantization digits."""
@@ -326,43 +332,88 @@ class RPGTokenizer(AbstractTokenizer):
 
         return input_ids, attention_mask, labels, seq_lens
 
+    def _debug_fmt_ids(self, ids: list, label: str = '', limit: int = 8) -> str:
+        """Format a token id list for compact debug printing (truncates long lists)."""
+        if len(ids) <= limit:
+            preview = str(ids)
+        else:
+            preview = f'[{", ".join(str(x) for x in ids[:limit])}, ... ({len(ids)} total)]'
+        return f'{label}{preview}' if label else preview
+
     def tokenize_function(self, example: dict, split: str) -> dict:
         """Tokenize example: sliding windows for training, last window for inference."""
         max_item_seq_len = self.config['max_item_seq_len']
         item_seq = example['item_seq'][0]
-        
+
+        should_log = (self._debug_n_examples > 0 and
+                      self._debug_log_count[split] < self._debug_n_examples)
+
         # TRAINING mode: create multiple examples via sliding window
         if split == 'train':
-            if not self.config.get('use_sliding_window', True):
-                input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(
-                    item_seq=item_seq[-(max_item_seq_len + 1):],
-                    pad_labels=True,
-                )
-                return {
-                    'input_ids': [input_ids],
-                    'attention_mask': [attention_mask],
-                    'labels': [labels],
-                    'seq_lens': [seq_lens],
-                }
 
             n_return_examples = max(len(item_seq) - max_item_seq_len, 1)
 
-            # First example using all items up to max_len+1
+            if should_log:
+                self.log(
+                    f'\n[TOKENIZER:DEBUG] ── TRAIN example #{self._debug_log_count[split] + 1} ──────────────────────────\n'
+                    f'[TOKENIZER:DEBUG]  item_seq (len={len(item_seq)}): {list(item_seq)}\n'
+                    f'[TOKENIZER:DEBUG]  max_item_seq_len = {max_item_seq_len}\n'
+                    f'[TOKENIZER:DEBUG]  n_return_examples = max(len({len(item_seq)}) - {max_item_seq_len}, 1) = {n_return_examples}\n'
+                    f'[TOKENIZER:DEBUG]  → This one user will produce {n_return_examples} training row(s)'
+                )
+
+            # Window 0 — "first n items": ALL positions generate a label (next-item prediction
+            # across the whole prefix).  Slice used: item_seq[0 : min(len, max_len+1)]
+            first_slice = item_seq[:min(len(item_seq), max_item_seq_len + 1)]
             input_ids, attention_mask, labels, seq_lens = self._tokenize_first_n_items(
-                item_seq=item_seq[:min(len(item_seq), max_item_seq_len + 1)]
+                item_seq=first_slice
             )
-            
+
+            if should_log:
+                self.log(
+                    f'[TOKENIZER:DEBUG]  Window 0 (_tokenize_first_n_items)\n'
+                    f'[TOKENIZER:DEBUG]    slice  : item_seq[0:{min(len(item_seq), max_item_seq_len + 1)}] = {list(first_slice)}\n'
+                    f'[TOKENIZER:DEBUG]    input  : {self._debug_fmt_ids(input_ids)}  '
+                    f'← all items except the last (ids via item2id)\n'
+                    f'[TOKENIZER:DEBUG]    labels : {self._debug_fmt_ids(labels)}  '
+                    f'← shifted by 1 (every position predicts the next item); '
+                    f'{self.ignored_label} = ignored (padding)\n'
+                    f'[TOKENIZER:DEBUG]    attn   : {self._debug_fmt_ids(attention_mask)}  '
+                    f'← 1=real token, 0=pad\n'
+                    f'[TOKENIZER:DEBUG]    seq_len: {seq_lens}  ← number of real (non-pad) tokens'
+                )
+
             all_input_ids, all_attention_mask, all_labels, all_seq_lens = \
                 [input_ids], [attention_mask], [labels], [seq_lens]
 
-            # Sliding window: create examples by shifting window position
+            # Windows 1..n — "later items": ONLY the last position generates a label.
+            # The window slides one step to the right for each i.
             for i in range(1, n_return_examples):
-                cur_item_seq = item_seq[i:i+max_item_seq_len+1]
+                cur_item_seq = item_seq[i:i + max_item_seq_len + 1]
                 input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(cur_item_seq)
                 all_input_ids.append(input_ids)
                 all_attention_mask.append(attention_mask)
                 all_labels.append(labels)
                 all_seq_lens.append(seq_lens)
+
+                if should_log:
+                    self.log(
+                        f'[TOKENIZER:DEBUG]  Window {i} (_tokenize_later_items)\n'
+                        f'[TOKENIZER:DEBUG]    slice  : item_seq[{i}:{i + max_item_seq_len + 1}] = {list(cur_item_seq)}\n'
+                        f'[TOKENIZER:DEBUG]    input  : {self._debug_fmt_ids(input_ids)}\n'
+                        f'[TOKENIZER:DEBUG]    labels : {self._debug_fmt_ids(labels)}  '
+                        f'← only the LAST position is a real label '
+                        f'(avoids re-training on already-seen history)\n'
+                        f'[TOKENIZER:DEBUG]    attn   : {self._debug_fmt_ids(attention_mask)}\n'
+                        f'[TOKENIZER:DEBUG]    seq_len: {seq_lens}'
+                    )
+
+            if should_log:
+                self._debug_log_count[split] += 1
+                self.log(
+                    f'[TOKENIZER:DEBUG]  → Produced {len(all_input_ids)} row(s) for this user\n'
+                    f'[TOKENIZER:DEBUG] ────────────────────────────────────────────────────────'
+                )
 
             return {
                 'input_ids': all_input_ids,
@@ -370,13 +421,31 @@ class RPGTokenizer(AbstractTokenizer):
                 'labels': all_labels,
                 'seq_lens': all_seq_lens,
             }
-        
-        # INFERENCE mode: use last window only
+
+        # INFERENCE mode (val / test): only the LAST window is used.
+        # Target item is always the last element of item_seq (left out during splitting).
         else:
+            inference_slice = item_seq[-(max_item_seq_len + 1):]
             input_ids, attention_mask, labels, seq_lens = self._tokenize_later_items(
-                item_seq=item_seq[-(max_item_seq_len+1):],
+                item_seq=inference_slice,
                 pad_labels=True
             )
+
+            if should_log:
+                self.log(
+                    f'\n[TOKENIZER:DEBUG] ── {split.upper()} example #{self._debug_log_count[split] + 1} ──────────────────────────\n'
+                    f'[TOKENIZER:DEBUG]  item_seq (len={len(item_seq)}): {list(item_seq)}\n'
+                    f'[TOKENIZER:DEBUG]  Using LAST window only (inference mode)\n'
+                    f'[TOKENIZER:DEBUG]    slice  : item_seq[-{max_item_seq_len + 1}:] = {list(inference_slice)}\n'
+                    f'[TOKENIZER:DEBUG]    input  : {self._debug_fmt_ids(input_ids)}\n'
+                    f'[TOKENIZER:DEBUG]    labels : {self._debug_fmt_ids(labels)}  '
+                    f'← only the very last position carries the ground-truth target\n'
+                    f'[TOKENIZER:DEBUG]    attn   : {self._debug_fmt_ids(attention_mask)}\n'
+                    f'[TOKENIZER:DEBUG]    seq_len: {seq_lens}\n'
+                    f'[TOKENIZER:DEBUG] ────────────────────────────────────────────────────────'
+                )
+                self._debug_log_count[split] += 1
+
             return {
                 'input_ids': [input_ids],
                 'attention_mask': [attention_mask],
@@ -387,9 +456,30 @@ class RPGTokenizer(AbstractTokenizer):
     def tokenize(self, datasets: dict) -> dict:
         """Apply tokenize_function to all splits and convert to PyTorch tensors."""
         tokenized_datasets = {}
-        
+
+        self.log(
+            f'\n[TOKENIZER] ══════════════════════════════════════════════════════\n'
+            f'[TOKENIZER]  TOKENIZE() — overview of what is about to happen\n'
+            f'[TOKENIZER]  max_item_seq_len = {self.config["max_item_seq_len"]}\n'
+            f'[TOKENIZER]  Training strategy  : SLIDING WINDOW\n'
+            f'[TOKENIZER]    • Window 0  → _tokenize_first_n_items  (ALL positions labelled)\n'
+            f'[TOKENIZER]    • Window 1+ → _tokenize_later_items    (LAST position only)\n'
+            f'[TOKENIZER]  Inference strategy : LAST WINDOW ONLY (_tokenize_later_items)\n'
+            f'[TOKENIZER]  Detailed window logs enabled for first '
+            f'{self._debug_n_examples} example(s) per split '
+            f'(set tokenizer_debug_n_examples=0 to silence)\n'
+            f'[TOKENIZER] ══════════════════════════════════════════════════════'
+        )
+
         for split in datasets:
-            # Apply tokenization function to all examples in this split
+            n_users = len(datasets[split])
+            self.log(
+                f'[TOKENIZER] Tokenizing {split} set '
+                f'({n_users} user sequences)...'
+            )
+            # Reset per-split counter so debug logs fire at the start of each split
+            self._debug_log_count[split] = 0
+
             tokenized_datasets[split] = datasets[split].map(
                 lambda t: self.tokenize_function(t, split),
                 batched=True,
@@ -399,8 +489,23 @@ class RPGTokenizer(AbstractTokenizer):
                 desc=f'Tokenizing {split} set: '
             )
 
+            n_rows = len(tokenized_datasets[split])
+            expansion = n_rows / n_users if n_users > 0 else 0
+            self.log(
+                f'[TOKENIZER] {split} set tokenized: '
+                f'{n_users} users → {n_rows} rows '
+                f'(expansion factor ≈ {expansion:.2f}x via sliding window)'
+            )
+
         # Convert to PyTorch tensors for efficient GPU computation
         for split in datasets:
             tokenized_datasets[split].set_format(type='torch')
 
+        self.log(
+            f'[TOKENIZER] Final dataset sizes (rows ready for DataLoader):\n'
+            + '\n'.join(
+                f'[TOKENIZER]   {split:5s}: {len(tokenized_datasets[split])} rows'
+                for split in tokenized_datasets
+            )
+        )
         return tokenized_datasets
