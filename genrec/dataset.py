@@ -24,7 +24,8 @@ class AbstractDataset:
                 f'\tNumber of users: {self.n_users}\n' \
                 f'\tNumber of items: {self.n_items}\n' \
                 f'\tNumber of interactions: {self.n_interactions}\n' \
-                f'\tAverage item sequence length: {self.avg_item_seq_len}'
+                f'\tAverage item sequence length: {self.avg_item_seq_len}\n' \
+                f'\tNote: The number of users and items are increased by 1, due to user2id and item2id having padding (\'user2id\': {{\'[PAD]\': 0}})'
 
     @property
     def n_users(self):
