@@ -197,7 +197,7 @@ class AbstractDataset:
 
         self.split_data = datasets
         self.log('[DATASET] Split complete...')
-        self.log("CONTENT OF SPLIT_DATASET HUGGINGFACE DATASET OBJECTS:")
+        self.log("CONTENT OF SPLIT_DATASET:")
         for split_name in ('train', 'val', 'test'):
             self.log(f"[DATASET] {split_name}: {self.split_data[split_name]}")
             
