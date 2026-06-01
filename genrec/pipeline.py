@@ -167,31 +167,3 @@ class Pipeline:
 
     def log(self, message, level='info'):
         return log(message, self.config['accelerator'], self.logger, level=level)
-    
-# ========= Content of each batch in each dataloader (OLD)==========
-        '''
-        All three have 4 keys: 
-        - input_ids: shape (batch_size, seq_len), values are item ids 
-        - attention_mask: shape (batch_size, seq_len), values are 0 or 1
-        - labels: shape (batch_size, seq_len) for training, shape (batch_size, 1) for validation/test, values are item ids
-        - seq_lens: shape (batch_size,), values are lengths of sequences
-        
-        Training dataloader:
-        - input_ids: [[ 1765,   455,  4885,  ...,     0,     0,     0],
-                      [  455,  4885,  1765,  ...,     0,     0,     0]]
-        - attention_mask: [[1, 1, 1, ..., 0, 0, 0],
-                           [1, 1, 1, ..., 0, 0, 0]]
-        - labels: [[ 455,  4885,  1765,  ...,     0,     0,     0],
-                   [ 4885,  1765,  455,  ...,     0,     0,    0]]
-        - seq_lens: [4, 4]
-                      
-        Validation dataloader/Test dataloader:
-        - input_ids: [[  1,   2,   3,  ...,   0,   0,   0],
-                      [  4,   5,   6,  ...,   0,   0,   0]]
-        - attention_mask: [[1, 1, 1, ..., 0, 0, 0],
-                           [1, 1, 1, ..., 0, 0, 0]]
-        - labels: [[ 2], 
-                   [ 5]]
-        - seq_lens: [3, 3]
-        '''
-# ===========================================================
