@@ -200,6 +200,11 @@ class AbstractDataset:
         self.log("CONTENT OF SPLIT_DATASET HUGGINGFACE DATASET OBJECTS:")
         for split_name in ('train', 'val', 'test'):
             self.log(f"[DATASET] {split_name}: {self.split_data[split_name]}")
+            
+        self.log("One example of each split:")
+        for split_name in ('train', 'val', 'test'):
+            self.log(f"[DATASET] {split_name}: {self.split_data[split_name][0]}")
+
         return self.split_data
 
     def log(self, message, level='info'):
