@@ -126,6 +126,8 @@ class Trainer:
         
         # ============ Training Loop ============
         for epoch in range(n_epochs):
+            self.log(f'[TRAINER] ======================= Epoch {epoch + 1} started... ========================')
+            self.log(f'[TRAINER] ==================== TRAINING ====================')
             # ===== Training Phase =====
             self.model.train()
             total_loss = 0.0
@@ -162,6 +164,7 @@ class Trainer:
                 )
 
             # ===== Validation Phase =====
+            self.log(f'[TRAINER] ======================= VALIDATION ========================')
             # Evaluate on validation set at specified intervals
             if (epoch + 1) % self.config['eval_interval'] == 0:
                 all_results = self.evaluate(val_dataloader, split='val')
@@ -173,6 +176,7 @@ class Trainer:
                             self.accelerator.log({f"Loss/val_loss": all_results[key]}, step=epoch + 1)
                     self.log(f'[Epoch {epoch + 1}] Val Results: {all_results}')
                 val_score = all_results[self.config['val_metric']]
+                
                 # Save model if validation score improves
                 if val_score > best_val_score:
                     best_val_score = val_score
@@ -189,6 +193,8 @@ class Trainer:
                 if self.config['patience'] is not None and epoch + 1 - best_epoch >= self.config['patience']:
                     self.log(f'EARLY STOPPING AT EPOCH {epoch + 1}')
                     break
+                
+                
         self.log(f'BEST EPOCH: {best_epoch}, BEST VAL SCORE ({self.config["val_metric"]}): {best_val_score}')
         return best_epoch, best_val_score
 
