@@ -57,3 +57,6 @@ num_workers: 64
 quantizer_temperature: 1.0
 min_quantizer_temperature: 0.1
 quantizer_temperature_decay: 0.9
+
+# DEBUG configs
+tokenizer_debug_n_examples: 0

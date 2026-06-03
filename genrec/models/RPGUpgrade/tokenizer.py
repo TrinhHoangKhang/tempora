@@ -9,11 +9,12 @@ from genrec.models.RPG.tokenizer import RPGTokenizer
 class RPGUpgradeTokenizer(RPGTokenizer):
     """
     Extends RPGTokenizer to additionally expose:
-        self.sent_embs      – np.ndarray (n_items, d), item_id-indexed (row 0 = zeros)
-        self.opq_rotation   – np.ndarray (d, d) or None if index unavailable
-        self.pq_codebooks   – np.ndarray (D, K, d/D) or None if index unavailable
+        self.sent_embs    – np.ndarray (n_items, d), item_id-indexed (row 0 = zeros)
+        self.opq_rotation – np.ndarray (d, d) or None if index unavailable
+        self.pq_codebooks – np.ndarray (D, K, d/D) or None if index unavailable
 
-    These are used by RPGUpgrade to warm-initialize the DPQ module.
+    These are used by RPGUpgrade to warm-initialize the DPQ linear projection and
+    Key/Value codebooks.
     """
 
     def _init_tokenizer(self, dataset: AbstractDataset):
@@ -21,7 +22,7 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         Same as RPGTokenizer but also:
           1. Keeps the sentence embeddings in self.sent_embs
           2. Saves the FAISS index alongside .sem_ids for warm-init extraction
-          3. Extracts OPQ rotation R and PQ codebooks K from the saved index
+          3. Extracts OPQ rotation R and PQ codebooks K for DPQ warm-initialization
         """
         sem_ids_path = os.path.join(
             dataset.cache_dir, 'processed',
@@ -29,29 +30,42 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         )
         index_path = sem_ids_path.replace('.sem_ids', '.faiss')
 
+        self.log(
+            f'[TOKENIZER] ══════════════════════════════════════════════════════\n'
+            f'[TOKENIZER]  RPGUpgrade _init_tokenizer() — overview\n'
+            f'[TOKENIZER]    sem_ids cache : {sem_ids_path}\n'
+            f'[TOKENIZER]    faiss cache   : {index_path}\n'
+            f'[TOKENIZER]    index_factory : {self.index_factory}\n'
+            f'[TOKENIZER] ══════════════════════════════════════════════════════'
+        )
+
         # ------------------------------------------------------------------
         # 1. Load / encode sentence embeddings
         # ------------------------------------------------------------------
+        self.log(f'[TOKENIZER] ======= 1. LOAD / ENCODE SENTENCE EMBEDDINGS =======')
         sent_emb_path = os.path.join(
             dataset.cache_dir, 'processed',
             f'{os.path.basename(self.config["sent_emb_model"])}.sent_emb'
         )
-        # If SENTENCE EMBEDDINGS CACHE does not exist, generate it.
         if os.path.exists(sent_emb_path):
-            self.log('[TOKENIZER] Loading sentence embeddings...')
+            self.log(f'[TOKENIZER] Sentence embeddings already exist in {sent_emb_path}')
+            self.log(f'[TOKENIZER] Loading sentence embeddings from {sent_emb_path}...')
             sent_embs = np.fromfile(sent_emb_path, dtype=np.float32).reshape(
                 -1, self.config['sent_emb_dim']
             )
         else:
-            self.log('[TOKENIZER] Encoding sentence embeddings...')
+            self.log(f'[TOKENIZER] Sentence embeddings not found — creating...')
             sent_embs = self._encode_sent_emb(dataset, sent_emb_path)
 
-        # Apply PCA if configured
         if self.config['sent_emb_pca'] > 0:
-            self.log('[TOKENIZER] Applying PCA...')
+            self.log(f'[TOKENIZER] Applying PCA to sentence embeddings...')
+            self.log(f'[TOKENIZER] Embeddings shape before PCA: {sent_embs.shape}')
             from sklearn.decomposition import PCA
             pca = PCA(n_components=self.config['sent_emb_pca'], whiten=True)
             sent_embs = pca.fit_transform(sent_embs).astype(np.float32)
+            self.log(f'[TOKENIZER] Embeddings shape after PCA: {sent_embs.shape}')
+        else:
+            self.log(f'[TOKENIZER] PCA disabled (sent_emb_pca=0); shape: {sent_embs.shape}')
 
         emb_dim = sent_embs.shape[1]
 
@@ -59,46 +73,63 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         padded = np.zeros((sent_embs.shape[0] + 1, emb_dim), dtype=np.float32)
         padded[1:] = sent_embs
         self.sent_embs = padded  # shape: (n_items, emb_dim)
+        self.log(
+            f'[TOKENIZER] Built self.sent_embs table: shape={self.sent_embs.shape} '
+            f'(row 0 = zero padding vector)'
+        )
 
         # ------------------------------------------------------------------
         # 2. Build OPQ index if not already cached (also saves .faiss)
         # ------------------------------------------------------------------
-        # If SEMANTIC_IDS CACHE does not exist, generate it.
+        self.log(f'[TOKENIZER] ======= 2. BUILD / LOAD OPQ INDEX + SEMANTIC IDS =======')
         if not os.path.exists(sem_ids_path):
-            # CACHE DONT EXIST -> GENERATE SEMANTIC IDS AND SAVE FAISS INDEX.
-            self.log(f'[TOKENIZER] Embeddings shape: {sent_embs.shape}')
+            self.log(f'[TOKENIZER] Semantic IDs mapping does not exist at {sem_ids_path}')
+            self.log(f'[TOKENIZER] Will train OPQ, save .faiss and .sem_ids')
+            self.log(f'[TOKENIZER] ================== 2a. GENERATE TRAINING ITEM MASK =============')
             training_item_mask = self._get_items_for_training(dataset)
+            self.log(f'[TOKENIZER] ================== 2b. TRAIN OPQ + SAVE INDEX ===================')
             self._generate_semantic_id_opq_and_save_index(
                 sent_embs, sem_ids_path, index_path, training_item_mask
             )
         elif not os.path.exists(index_path):
-            # sem_ids CACHE exist but .faiss was not saved – re-build
-            self.log('[TOKENIZER] FAISS index not found alongside .sem_ids; re-building...')
+            self.log(
+                f'[TOKENIZER] Semantic IDs exist at {sem_ids_path} but FAISS index '
+                f'missing at {index_path}'
+            )
+            self.log(f'[TOKENIZER] Re-building FAISS index only (skip_sem_ids=True)...')
             training_item_mask = self._get_items_for_training(dataset)
             self._generate_semantic_id_opq_and_save_index(
                 sent_embs, sem_ids_path, index_path, training_item_mask,
-                skip_sem_ids=True  # don't overwrite the existing .sem_ids
+                skip_sem_ids=True
+            )
+        else:
+            self.log(
+                f'[TOKENIZER] Semantic IDs and FAISS index already cached — skipping OPQ training'
             )
 
         # ------------------------------------------------------------------
         # 3. Extract warm-init parameters from the saved FAISS index
         # ------------------------------------------------------------------
+        self.log(f'[TOKENIZER] ======= 3. EXTRACT DPQ WARM-INIT PARAMS =======')
         if os.path.exists(index_path):
-            self.log('[TOKENIZER] Extracting OPQ params from FAISS index...')
+            self.log(f'[TOKENIZER] Loading FAISS index from {index_path} for OPQ param extraction...')
             self._extract_opq_params(index_path, emb_dim)
         else:
-            self.log('[TOKENIZER] Warning: FAISS index not found – DPQ will use random init.')
+            self.log(
+                f'[TOKENIZER] Warning: FAISS index not found at {index_path} — '
+                f'DPQ module will use random initialization'
+            )
             self.opq_rotation = None
             self.pq_codebooks = None
 
         # ------------------------------------------------------------------
         # 4. Load semantic IDs (same as parent)
         # ------------------------------------------------------------------
-        # LOAD SEMANTIC IDS FROM CACHE.
-        self.log('[TOKENIZER] Loading semantic IDs...')
+        self.log(f'[TOKENIZER] =============== 4. CREATING ITEM2TOKENS MAPPING... ==============')
+        self.log(f'[TOKENIZER] Loading ITEM2SEM_IDS mapping from {sem_ids_path}...')
         item2sem_ids = json.load(open(sem_ids_path, 'r'))
-        # CONVERT SEMANTIC IDS TO TOKENS.
         item2tokens = self._sem_ids_to_tokens(item2sem_ids)
+        self.log(f'[TOKENIZER] Successfully created ITEM2TOKENS mapping ({len(item2tokens)} items)')
         return item2tokens
 
     # ------------------------------------------------------------------
@@ -117,25 +148,33 @@ class RPGUpgradeTokenizer(RPGTokenizer):
 
         faiss.omp_set_num_threads(self.config['faiss_omp_num_threads'])
 
+        self.log(f'[TOKENIZER] Creating OPQ index with {self.index_factory}...')
         index = faiss.index_factory(
             sent_embs.shape[1],
             self.index_factory,
             faiss.METRIC_INNER_PRODUCT
         )
 
-        self.log('[TOKENIZER] Training index...')
+        self.log(
+            f'[TOKENIZER] Training index on {train_mask.sum()} / {train_mask.shape[0]} items '
+            f'(opq_use_gpu={self.config["opq_use_gpu"]})...'
+        )
         if self.config['opq_use_gpu']:
             index = faiss.index_cpu_to_gpu(res, self.config['opq_gpu_id'], index, co)
         index.train(sent_embs[train_mask])
         index.add(sent_embs)
         if self.config['opq_use_gpu']:
             index = faiss.index_gpu_to_cpu(index)
+        self.log(f'[TOKENIZER] Index trained and populated with {sent_embs.shape[0]} vectors')
 
-        # Save FAISS index for DPQ warm-init
         self.log(f'[TOKENIZER] Saving FAISS index to {index_path}...')
         faiss.write_index(index, index_path)
 
-        if not skip_sem_ids:
+        if skip_sem_ids:
+            self.log(
+                f'[TOKENIZER] skip_sem_ids=True — keeping existing semantic IDs at {sem_ids_path}'
+            )
+        else:
             # Extract PQ codes and write .sem_ids (same logic as parent)
             ivf_index = faiss.downcast_index(index.index)
             invlists = faiss.extract_index_ivf(ivf_index).invlists
@@ -156,9 +195,13 @@ class RPGUpgradeTokenizer(RPGTokenizer):
                 for i in range(pq_codes_arr.shape[0])
             }
 
-            self.log(f'[TOKENIZER] Saving semantic IDs to {sem_ids_path}...')
+            self.log(
+                f'[TOKENIZER] Extracted PQ codes for {pq_codes_arr.shape[0]} items; '
+                f'saving ITEM2SEM_IDS to {sem_ids_path}...'
+            )
             with open(sem_ids_path, 'w') as f:
                 json.dump(item2sem_ids, f)
+            self.log(f'[TOKENIZER] Semantic IDs saved successfully')
 
     # ------------------------------------------------------------------
     # Helper: extract R and K from saved FAISS index
@@ -166,8 +209,8 @@ class RPGUpgradeTokenizer(RPGTokenizer):
     def _extract_opq_params(self, index_path: str, emb_dim: int):
         """
         Extracts:
-            self.opq_rotation  – (d, d) float32 numpy array  (the OPQ rotation matrix A)
-            self.pq_codebooks  – (D, K, d/D) float32 numpy array  (PQ centroids)
+            self.opq_rotation – (d, d) float32 numpy array  (OPQ linear transform)
+            self.pq_codebooks – (D, K, d/D) float32 numpy array  (PQ centroids)
 
         FAISS OPQ index structure:
             IndexPreTransform
@@ -177,13 +220,15 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         import faiss
 
         index = faiss.read_index(index_path)
+        self.log(f'[TOKENIZER] FAISS index loaded (type={type(index).__name__})')
 
-        # --- Rotation matrix ---
+        # --- Rotation / linear transform matrix ---
+        # A is stored row-major as (d_out, d_in) = (d, d).
+        # FAISS transform convention: y = x @ A^T  (same as nn.Linear weight).
         vt = faiss.downcast_VectorTransform(index.chain.at(0))
-        # A is stored row-major as (d_out, d_in) = (d, d)
-        # FAISS transform: y = x @ A^T  →  same convention as nn.Linear weight
         R = faiss.vector_to_array(vt.A).reshape(emb_dim, emb_dim).copy()
         self.opq_rotation = R.astype(np.float32)  # (d, d)
+        self.log(f'[TOKENIZER] Extracted opq_rotation: shape={self.opq_rotation.shape}')
 
         # --- PQ codebooks ---
         ivf_index = faiss.extract_index_ivf(faiss.downcast_index(index.index))
@@ -193,3 +238,8 @@ class RPGUpgradeTokenizer(RPGTokenizer):
         self.pq_codebooks = centroids.reshape(
             self.n_digit, self.codebook_size, sub_dim
         ).copy().astype(np.float32)  # (D, K, d/D)
+        self.log(
+            f'[TOKENIZER] Extracted pq_codebooks: shape={self.pq_codebooks.shape} '
+            f'(n_digit={self.n_digit}, codebook_size={self.codebook_size}, sub_dim={sub_dim})'
+        )
+        self.log(f'[TOKENIZER] DPQ warm-init ready — rotation + codebooks loaded from FAISS')

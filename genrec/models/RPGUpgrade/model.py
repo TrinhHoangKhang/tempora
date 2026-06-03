@@ -6,7 +6,7 @@ Key differences from RPG:
   - A learnable DPQ module (with Gumbel-Softmax + STE) sits between sentence
     embeddings and GPT-2, making the quantization step end-to-end trainable
   - The DPQ module contains:
-        R  – orthogonal rotation matrix (warm-init from FAISS OPQ, stays orthogonal)
+        R  – unconstrained linear projection (warm-init from FAISS OPQ transform)
         K  – Key codebooks for similarity (warm-init from FAISS PQ centroids)
         V  – Value codebooks for reconstruction (separate from K)
   - Everything downstream of DPQ (GPT-2, prediction heads, loss, generate) is
@@ -16,7 +16,6 @@ Key differences from RPG:
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.parametrizations import orthogonal
 from transformers import GPT2Config, GPT2Model
 
 from genrec.dataset import AbstractDataset
@@ -53,15 +52,15 @@ class DPQ(nn.Module):
         n_clusters : Codebook size K per subspace.
         v_dim      : Value vector dimension per subspace.
                      Output dimension = D * v_dim.
-        tokenizer  : RPGUpgradeTokenizer; used for warm-initialisation of K.
-                     (R is initialised as a random orthogonal matrix — see note.)
+        tokenizer  : RPGUpgradeTokenizer; used for warm-initialisation of R, K, and V.
 
-    Note on R warm-init:
-        PyTorch's `orthogonal` parametrisation applies a non-linear map
-        (Cayley / Householder) to an internal `original` parameter, so there is
-        no straightforward way to back-solve a specific target orthogonal matrix.
-        R therefore starts as a *random* orthogonal matrix.  K and V are
-        warm-initialised from the FAISS PQ centroids when available.
+    Note on R:
+        R is an unconstrained nn.Linear(d, d, bias=False) — no orthogonality
+        constraint.  It is warm-initialised with the FAISS OPQ transform matrix
+        when available, giving a consistent starting point together with K.
+        During training R is free to learn any linear transformation, which is
+        strictly more expressive than an orthogonal rotation and better suited to
+        the DPQ objective.
     """
 
     def __init__(self, d: int, D: int, n_clusters: int, v_dim: int, tokenizer):
@@ -74,15 +73,24 @@ class DPQ(nn.Module):
         self.sub_dim = d // D
         self.v_dim = v_dim
 
-        # --- Learnable orthogonal rotation R ---------------------------------
-        # nn.Linear weight shape: (d_out, d_in).  forward: y = x @ weight^T
-        # so weight = R means y = x @ R^T, matching FAISS OPQ convention.
+        # --- Learnable linear projection R -----------------------------------
+        # Unconstrained nn.Linear(d, d, bias=False): y = x @ weight^T.
+        # Warm-initialised from the FAISS OPQ transform so that R and K start
+        # in a consistent state.  No orthogonality constraint is imposed —
+        # the model is free to learn any linear transformation.
         self.rotation = nn.Linear(d, d, bias=False)
-        orthogonal(self.rotation)   # constrains rotation.weight to be orthogonal
+        if tokenizer.opq_rotation is not None:
+            print(f'[MODEL] Warm-initializing rotation from FAISS OPQ transform')
+            with torch.no_grad():
+                self.rotation.weight.copy_(
+                    torch.from_numpy(tokenizer.opq_rotation)
+                )
+        else:
+            print(f'[MODEL] opq_rotation unavailable — rotation uses default init')
 
         # --- Key codebooks K (D, n_clusters, sub_dim) ------------------------
+        print('[MODEL] Creating K matrix')
         if tokenizer.pq_codebooks is not None:
-            print('[MODEL] Creating K matrix')
             print(f'[MODEL] Using pre-trained PQ codebooks...')
             K_init = torch.from_numpy(tokenizer.pq_codebooks).float()  # (D, K, sub_dim)
         else:
@@ -91,8 +99,8 @@ class DPQ(nn.Module):
         self.K = nn.Parameter(K_init)
 
         # --- Value codebooks V (D, n_clusters, v_dim) ------------------------
+        print('[MODEL] Creating V matrix')
         if v_dim == self.sub_dim and tokenizer.pq_codebooks is not None:
-            print('[MODEL] Creating V matrix')
             print(f'[MODEL] Using pre-trained PQ value codebooks...')
             V_init = torch.from_numpy(tokenizer.pq_codebooks).float()
         else:
