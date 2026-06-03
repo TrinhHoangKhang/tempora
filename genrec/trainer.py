@@ -123,10 +123,7 @@ class Trainer:
         self.log(f'[TRAINER] Number of training samples: {n_train_samples}')
         self.log(f'[TRAINER] Number of batches per epoch: {n_batches_per_epoch}')
         self.log(f'[TRAINER] Number of steps per epoch: {n_steps_per_epoch}')
-        self.log(
-            f'[TRAINER] Check: epochs × batches/epoch = {n_epochs * n_batches_per_epoch} '
-            f'(should match total steps when using config epochs and 1 GPU)'
-        )
+        
         # ============ Training Loop ============
         for epoch in range(n_epochs):
             # ===== Training Phase =====
