@@ -112,6 +112,21 @@ class Trainer:
         best_epoch = 0
         best_val_score = -1
 
+        # Print some info about training (1 GPU)
+        n_train_samples = len(train_dataloader.dataset)
+        n_batches_per_epoch = len(train_dataloader)
+        n_steps_per_epoch = n_batches_per_epoch  # 1 GPU: one optimizer.step() per batch
+        self.log('[TRAINER] ======================= Training started... ========================')
+        self.log(f'[TRAINER] Number of training epochs: {n_epochs}')
+        self.log(f'[TRAINER] Total training steps (LR schedule): {total_n_steps}')
+        self.log(f'[TRAINER] Training batch size: {self.config["train_batch_size"]}')
+        self.log(f'[TRAINER] Number of training samples: {n_train_samples}')
+        self.log(f'[TRAINER] Number of batches per epoch: {n_batches_per_epoch}')
+        self.log(f'[TRAINER] Number of steps per epoch: {n_steps_per_epoch}')
+        self.log(
+            f'[TRAINER] Check: epochs × batches/epoch = {n_epochs * n_batches_per_epoch} '
+            f'(should match total steps when using config epochs and 1 GPU)'
+        )
         # ============ Training Loop ============
         for epoch in range(n_epochs):
             # ===== Training Phase =====
