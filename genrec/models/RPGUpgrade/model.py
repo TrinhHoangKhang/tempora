@@ -253,13 +253,6 @@ class RPGUpgrade(AbstractModel):
         else:
             self.input_proj = nn.Identity()
 
-        # ------------------------------------------------------------------
-        # Output projection: maps GPT-2 hidden states to DPQ reconstruction space
-        # so that scoring is done against DPQ(all items) — exact same space as input
-        #   This closes the input/output loop:
-        #    sent_emb_table → DPQ → GPT-2 → output_proj → score vs DPQ(sent_emb_table)
-        # By default dpq_out_dim == n_embd, so this is just nn.Identity (no extra params)
-        # ------------------------------------------------------------------
         if dpq_out_dim != config['n_embd']:
             self.output_proj: nn.Module = nn.Linear(config['n_embd'], dpq_out_dim)
         else:
