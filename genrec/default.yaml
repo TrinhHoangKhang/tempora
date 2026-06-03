@@ -5,7 +5,7 @@ wandb_log_dir: wandb/
 ckpt_dir: ckpt/
 run_id: genrec_default  # Used as the W&B run name
 wandb_entity: ~         # W&B team/username; null uses your default entity
-wandb_project: ~        # W&B project; null uses the auto-generated run config name
+wandb_project: RPG_Baseline_Beauty        # W&B project; null uses the auto-generated run config name
 wandb_tags: []
 wandb_notes: ~
 rand_seed: 2024
