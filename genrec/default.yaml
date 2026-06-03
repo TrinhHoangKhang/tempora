@@ -20,7 +20,7 @@ steps: ~
 epochs: 150
 max_grad_norm: 1.0      # None for no clipping, else a float value
 eval_interval: 1        # Evaluate every n epochs
-patience: 20            # Early stopping. Stop training after n epochs without improvement. Set to None to disable
+patience: 10 # default: 20            # Early stopping. Stop training after n epochs without improvement. Set to None to disable
 
 topk: [5,10]
 metrics: [ndcg,recall]
