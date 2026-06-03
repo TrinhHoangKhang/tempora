@@ -1,18 +1,3 @@
-"""
-RPGUpgrade: RPG with end-to-end Differentiable Product Quantization (DPQ)
-
-Key differences from RPG:
-  - Input embeddings come from a frozen sentence embedding table (not GPT-2 wte)
-  - A learnable DPQ module (with Gumbel-Softmax + STE) sits between sentence
-    embeddings and GPT-2, making the quantization step end-to-end trainable
-  - The DPQ module contains:
-        R  – unconstrained linear projection (warm-init from FAISS OPQ transform)
-        K  – Key codebooks for similarity (warm-init from FAISS PQ centroids)
-        V  – Value codebooks for reconstruction (separate from K)
-  - Everything downstream of DPQ (GPT-2, prediction heads, loss, generate) is
-    identical to RPG
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,37 +15,6 @@ from genrec.tokenizer import AbstractTokenizer
 class DPQ(nn.Module):
     """
     Differentiable Product Quantization.
-
-    Maps (B, L, d) continuous embeddings through a discrete bottleneck and
-    returns (B, L, D * v_dim) reconstructed embeddings via STE, so that
-    gradients flow back through K, V, and R.
-
-    Pipeline per forward call:
-        1. Rotate:   x_rot  = x @ R^T                     (B, L, d)
-        2. Split:    x_sub  = x_rot split into D chunks    (B, L, D, d/D)
-        3. Logits:   l      = x_sub · K^T                 (B, L, D, n_clusters)
-        4. Sample:   C̃      = Gumbel-Softmax(l, τ)        (B, L, D, n_clusters)
-        5. Hard:     codes  = argmax(l)                    (B, L, D)  [no grad]
-        6. Hard rec: H_hard = V[codes]                     (B, L, D, v_dim)
-        7. Soft rec: H_soft = C̃ @ V                       (B, L, D, v_dim)
-        8. STE:      H      = H_hard + H_soft - sg(H_soft) (B, L, D, v_dim)
-        9. Flatten:  output = H.reshape(B, L, D * v_dim)
-
-    Args:
-        d          : Sentence embedding dimension (input).
-        D          : Number of PQ subspaces (= n_codebook in config).
-        n_clusters : Codebook size K per subspace.
-        v_dim      : Value vector dimension per subspace.
-                     Output dimension = D * v_dim.
-        tokenizer  : RPGUpgradeTokenizer; used for warm-initialisation of R, K, and V.
-
-    Note on R:
-        R is an unconstrained nn.Linear(d, d, bias=False) — no orthogonality
-        constraint.  It is warm-initialised with the FAISS OPQ transform matrix
-        when available, giving a consistent starting point together with K.
-        During training R is free to learn any linear transformation, which is
-        strictly more expressive than an orthogonal rotation and better suited to
-        the DPQ objective.
     """
 
     def __init__(self, d: int, D: int, n_clusters: int, v_dim: int, tokenizer):
@@ -212,21 +166,6 @@ class ResBlock(nn.Module):
 # ---------------------------------------------------------------------------
 
 class RPGUpgrade(AbstractModel):
-    """
-    GPT-2 Sequential Recommendation with end-to-end Differentiable PQ.
-
-    Compared to RPG the only change is in how input embeddings are produced:
-        RPG       : item_ids → item2tokens (frozen) → GPT-2 wte → mean-pool → GPT-2
-        RPGUpgrade: item_ids → frozen sent_emb_table → DPQ (learnable) → proj → GPT-2
-
-    Everything downstream (prediction heads, loss, generate) is identical.
-
-    Config keys specific to RPGUpgrade:
-        dpq_v_dim (int, optional): Value vector dimension per subspace.
-            Defaults to n_embd // n_codebook, so DPQ output = n_embd directly
-            and no projection layer is needed.
-        quantizer_temperature (float): Initial Gumbel-Softmax temperature τ.
-    """
 
     def __init__(
         self,
