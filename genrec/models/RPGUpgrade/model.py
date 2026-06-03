@@ -67,7 +67,7 @@ class DPQ(nn.Module):
     def __init__(self, d: int, D: int, n_clusters: int, v_dim: int, tokenizer):
         super().__init__()
         assert d % D == 0, f"Sentence embedding dim ({d}) must be divisible by D ({D})"
-
+        print(f'[MODEL] Initializing DPQ module...')
         self.d = d
         self.D = D
         self.n_clusters = n_clusters
@@ -82,15 +82,21 @@ class DPQ(nn.Module):
 
         # --- Key codebooks K (D, n_clusters, sub_dim) ------------------------
         if tokenizer.pq_codebooks is not None:
+            print('[MODEL] Creating K matrix')
+            print(f'[MODEL] Using pre-trained PQ codebooks...')
             K_init = torch.from_numpy(tokenizer.pq_codebooks).float()  # (D, K, sub_dim)
         else:
+            print(f'[MODEL] Initializing random PQ codebooks...')
             K_init = torch.randn(D, n_clusters, self.sub_dim) * 0.02
         self.K = nn.Parameter(K_init)
 
         # --- Value codebooks V (D, n_clusters, v_dim) ------------------------
         if v_dim == self.sub_dim and tokenizer.pq_codebooks is not None:
+            print('[MODEL] Creating V matrix')
+            print(f'[MODEL] Using pre-trained PQ value codebooks...')
             V_init = torch.from_numpy(tokenizer.pq_codebooks).float()
         else:
+            print(f'[MODEL] Initializing random PQ value codebooks...')
             V_init = torch.randn(D, n_clusters, v_dim) * 0.02
         self.V = nn.Parameter(V_init)
 
@@ -221,7 +227,7 @@ class RPGUpgrade(AbstractModel):
         tokenizer: AbstractTokenizer,
     ):
         super().__init__(config, dataset, tokenizer)
-
+        print(f'[MODEL] Initializing RPGUpgrade model...')
         # ------------------------------------------------------------------
         # Sentence embedding table  (item_id → sent_emb)
         # TOGGLE: set freeze=True to lock embeddings (original behaviour),

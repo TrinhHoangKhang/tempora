@@ -16,7 +16,7 @@ class AbstractModel(nn.Module):
         self.config = config
         self.dataset = dataset
         self.tokenizer = tokenizer
-
+        
     @property
     def n_parameters(self):
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
