@@ -4,3 +4,4 @@
 /logs
 /wandb
 /figure
+analysis.py
