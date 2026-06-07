@@ -18,6 +18,7 @@ class Pipeline:
         model_name: Union[str, AbstractModel],
         dataset_name: Union[str, AbstractDataset],
         checkpoint_path: str = None,
+        eval_only: bool = False,
         tokenizer: AbstractTokenizer = None,
         trainer = None,
         config_dict: dict = None,
@@ -32,6 +33,9 @@ class Pipeline:
         # Automatically set devices and ddp
         self.config['device'], self.config['use_ddp'] = init_device() 
         self.checkpoint_path = checkpoint_path
+        self.eval_only = eval_only
+        if self.eval_only and self.checkpoint_path is None:
+            raise ValueError('eval_only requires a checkpoint path (--checkpoint).')
 
         # Accelerator
         self.project_dir = os.path.join(
@@ -101,19 +105,6 @@ class Pipeline:
         self.log("-------------------------------------------------------------------------------------------------------------------------------")
 
     def run(self):
-        # DataLoader
-        train_dataloader = DataLoader(
-            self.tokenized_datasets['train'],
-            batch_size=self.config['train_batch_size'],
-            shuffle=True,
-            collate_fn=self.tokenizer.collate_fn['train']
-        )
-        val_dataloader = DataLoader(
-            self.tokenized_datasets['val'],
-            batch_size=self.config['eval_batch_size'],
-            shuffle=False,
-            collate_fn=self.tokenizer.collate_fn['val']
-        )
         test_dataloader = DataLoader(
             self.tokenized_datasets['test'],
             batch_size=self.config['eval_batch_size'],
@@ -121,28 +112,50 @@ class Pipeline:
             collate_fn=self.tokenizer.collate_fn['test']
         )
 
-        self.log("===============================================================================================================================")
-        self.log("=============================================== CALLING TRAINER.FIT ===========================================================")
-        self.log("===============================================================================================================================")
-        best_epoch, best_val_score = self.trainer.fit(train_dataloader, val_dataloader)
-        self.log("-----------------------------------------------------------------")
-        
+        if self.eval_only:
+            self.log("===============================================================================================================================")
+            self.log("============================================== EVAL-ONLY MODE (SKIPPING TRAINING) =============================================")
+            self.log("===============================================================================================================================")
+            best_epoch, best_val_score = None, None
+        else:
+            train_dataloader = DataLoader(
+                self.tokenized_datasets['train'],
+                batch_size=self.config['train_batch_size'],
+                shuffle=True,
+                collate_fn=self.tokenizer.collate_fn['train']
+            )
+            val_dataloader = DataLoader(
+                self.tokenized_datasets['val'],
+                batch_size=self.config['eval_batch_size'],
+                shuffle=False,
+                collate_fn=self.tokenizer.collate_fn['val']
+            )
+
+            self.log("===============================================================================================================================")
+            self.log("=============================================== CALLING TRAINER.FIT ===========================================================")
+            self.log("===============================================================================================================================")
+            best_epoch, best_val_score = self.trainer.fit(train_dataloader, val_dataloader)
+            self.log("-----------------------------------------------------------------")
+
+            self.accelerator.wait_for_everyone()
+
+            # Load best model checkpoint saved during training
+            self.log("===============================================================================================================================")
+            self.log("============================================== LOADING BEST MODEL CHECKPOINT ==================================================")
+            self.log("===============================================================================================================================")
+            if self.checkpoint_path is None:
+                state_dict = torch.load(self.trainer.saved_model_ckpt, map_location=self.config['device'])
+                self.trainer.model.load_state_dict(state_dict)
+                if self.accelerator.is_main_process:
+                    self.log(f'Loaded best model checkpoint from {self.trainer.saved_model_ckpt}')
+            self.log("-------------------------------------------------------------------------------------------------------------------------------")
+
         self.accelerator.wait_for_everyone()
-        self.model = self.accelerator.unwrap_model(self.model)
-        
-        # Load best model checkpoint
-        self.log("===============================================================================================================================")
-        self.log("============================================== LOADING BEST MODEL CHECKPOINT ==================================================")
-        self.log("===============================================================================================================================")
-        if self.checkpoint_path is None:
-            self.model.load_state_dict(torch.load(self.trainer.saved_model_ckpt))
-        
+        self.model = self.accelerator.unwrap_model(self.trainer.model)
         self.model, test_dataloader = self.accelerator.prepare(
             self.model, test_dataloader
         )
-        if self.accelerator.is_main_process and self.checkpoint_path is None:
-            self.log(f'Loaded best model checkpoint from {self.trainer.saved_model_ckpt}')
-        self.log("-------------------------------------------------------------------------------------------------------------------------------")
+        self.trainer.model = self.model
         
         # Prepare model for evaluation
         self.log("===============================================================================================================================")

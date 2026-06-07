@@ -9,6 +9,11 @@ def parse_args():
     parser.add_argument('--model', type=str, default='RPG', help='Model name')
     parser.add_argument('--dataset', type=str, default='AmazonReviews2014', help='Dataset name')
     parser.add_argument('--checkpoint', type=str, default=None, help='Checkpoint path')
+    parser.add_argument(
+        '--eval_only',
+        action='store_true',
+        help='Load checkpoint and run test evaluation only (skips training)',
+    )
     return parser.parse_known_args()
 
 
@@ -20,6 +25,7 @@ if __name__ == '__main__':
         model_name=args.model,
         dataset_name=args.dataset,
         checkpoint_path=args.checkpoint,
-        config_dict=command_line_configs
+        eval_only=args.eval_only,
+        config_dict=command_line_configs,
     )
     pipeline.run()
