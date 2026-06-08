@@ -154,8 +154,6 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
     #     RPG       : item_ids → item2tokens (frozen) → GPT-2 wte → mean-pool → GPT-2
     #     RPGUpgrade: item_ids → frozen sent_emb_table → DPQ (learnable) → proj → GPT-2
 
-    # Everything downstream (prediction heads, loss, generate) is identical.
-
     # Config keys specific to RPGUpgrade:
     #     dpq_v_dim (int, optional): Value vector dimension per subspace.
     #         Defaults to n_embd // n_codebook, so DPQ output = n_embd directly
