@@ -18,12 +18,7 @@ from accelerate.utils import set_seed
 
 
 def init_seed(seed, reproducibility):
-    r"""init random seed for random functions in numpy, torch, cuda and cudnn
-
-    Args:
-        seed (int): random seed
-        reproducibility (bool): Whether to require reproducibility
-    """
+    # init random seed for random functions in numpy, torch, cuda and cudnn
 
     import random
     import numpy as np
@@ -44,11 +39,6 @@ def init_seed(seed, reproducibility):
 
 
 def get_local_time():
-    r"""Get current time
-
-    Returns:
-        str: current time
-    """
     cur = datetime.datetime.now()
     cur = cur.strftime("%b-%d-%Y_%H-%M")
     return cur
@@ -129,18 +119,7 @@ def log(message, accelerator, logger, level='info'):
 
 
 def get_tokenizer(model_name: str):
-    """
-    Retrieves the tokenizer for a given model name.
-
-    Args:
-        model_name (str): The model name.
-
-    Returns:
-        AbstractTokenizer: The tokenizer for the given model name.
-
-    Raises:
-        ValueError: If the tokenizer is not found.
-    """
+    # Retrieves the tokenizer for a given model name.
     try:
         tokenizer_class = getattr(
             importlib.import_module(f'genrec.models.{model_name}.tokenizer'),
@@ -152,18 +131,7 @@ def get_tokenizer(model_name: str):
 
 
 def get_model(model_name: Union[str, AbstractModel]) -> AbstractModel:
-    """
-    Retrieves the model class based on the provided model name.
-
-    Args:
-        model_name (Union[str, AbstractModel]): The name of the model or an instance of the model class.
-
-    Returns:
-        AbstractModel: The model class corresponding to the provided model name.
-
-    Raises:
-        ValueError: If the model name is not found.
-    """
+    # Retrieves the model class based on the provided model name.
     if isinstance(model_name, AbstractModel):
         return model_name
 
@@ -178,18 +146,7 @@ def get_model(model_name: Union[str, AbstractModel]) -> AbstractModel:
 
 
 def get_dataset(dataset_name: Union[str, AbstractDataset]) -> AbstractDataset:
-    """
-    Get the dataset object based on the dataset name or directly return the dataset object if it is already provided.
-
-    Args:
-        dataset_name (Union[str, AbstractDataset]): The name of the dataset or the dataset object itself.
-
-    Returns:
-        AbstractDataset: The dataset object.
-
-    Raises:
-        ValueError: If the dataset name is not found.
-    """
+    # Get the dataset object based on the dataset name or directly return the dataset object if it is already provided.
     if isinstance(dataset_name, AbstractDataset):
         return dataset_name
 
@@ -204,15 +161,7 @@ def get_dataset(dataset_name: Union[str, AbstractDataset]) -> AbstractDataset:
 
 
 def get_trainer(model_name: Union[str, AbstractModel]):
-    """
-    Returns the trainer class based on the given model name.
-
-    Parameters:
-        model_name (Union[str, AbstractModel]): The name of the model or an instance of the AbstractModel class.
-
-    Returns:
-        trainer_class: The trainer class corresponding to the given model name. If the model name is not found, the default Trainer class is returned.
-    """
+    # Returns the trainer class based on the given model name.
     from genrec.trainer import Trainer
     if isinstance(model_name, str):
         try:
@@ -228,15 +177,7 @@ def get_trainer(model_name: Union[str, AbstractModel]):
 
 
 def get_pipeline(model_name: Union[str, AbstractModel]):
-    """
-    Returns the pipeline class based on the given model name.
-
-    Parameters:
-        model_name (Union[str, AbstractModel]): The name of the model or an instance of the AbstractModel class.
-
-    Returns:
-        pipeline_class: The pipeline class corresponding to the given model name. If the model name is not found, the default Pipeline class is returned.
-    """
+    # Returns the pipeline class based on the given model name.
     from genrec.pipeline import Pipeline
     if isinstance(model_name, str):
         try:
@@ -251,17 +192,7 @@ def get_pipeline(model_name: Union[str, AbstractModel]):
         return Pipeline
 
 def get_total_steps(config, train_dataloader):
-    """
-    Calculate the total number of steps for training based on the given configuration and dataloader.
-
-    Args:
-        config (dict): The configuration dictionary containing the training parameters.
-        train_dataloader (DataLoader): The dataloader for the training dataset.
-
-    Returns:
-        int: The total number of steps for training.
-
-    """
+    # Calculate the total number of steps for training based on the given configuration and dataloader.
     if config['steps'] is not None:
         return config['steps']
     else:
@@ -269,16 +200,7 @@ def get_total_steps(config, train_dataloader):
 
 
 def convert_config_dict(config: dict) -> dict:
-    """
-    Convert the values in a dictionary to their appropriate types.
-
-    Args:
-        config (dict): The dictionary containing the configuration values.
-
-    Returns:
-        dict: The dictionary with the converted values.
-
-    """
+    # Convert the values in a dictionary to their appropriate types.
     for key in config:
         v = config[key]
         if not isinstance(v, str):
@@ -304,27 +226,10 @@ def get_config(
     config_file: Union[str, list[str], None],
     config_dict: Optional[dict]
 ) -> dict:
-    """
-    Get the configuration for a model and dataset.
-    Overwrite rule: config_dict > config_file > model config.yaml > dataset config.yaml > default.yaml
-
-    Args:
-        model_name (Union[str, AbstractModel]): The name of the model or an instance of the model class.
-        dataset_name (Union[str, AbstractDataset]): The name of the dataset or an instance of the dataset class.
-        config_file (Union[str, list[str], None]): The path to additional configuration file(s) or a list of paths to multiple additional configuration files. If None, default configurations will be used.
-        config_dict (Optional[dict]): A dictionary containing additional configuration options. These options will override the ones loaded from the configuration file(s).
-
-    Returns:
-        dict: The final configuration dictionary.
-
-    Raises:
-        FileNotFoundError: If any of the specified configuration files cannot be found.
-
-    Note:
-        - If `model_name` is a string, the function will attempt to load the model's configuration file located at `genrec/models/{model_name}/config.yaml`.
-        - If `dataset_name` is a string, the function will attempt to load the dataset's configuration file located at `genrec/datasets/{dataset_name}/config.yaml`.
-        - The function will merge the configurations from all the specified configuration files and the `config_dict` parameter.
-    """
+    
+    # Get the configuration for a model and dataset.
+    # Overwrite rule: config_dict > config_file > model config.yaml > dataset config.yaml > default.yaml
+    
     final_config = {}
     logger = getLogger()
 
@@ -378,19 +283,9 @@ def get_config(
 
 
 def parse_command_line_args(unparsed: list[str]) -> dict:
-    """
-    Parses command line arguments and returns a dictionary of key-value pairs.
-
-    Args:
-        unparsed (list[str]): A list of command line arguments in the format '--key=value'.
-
-    Returns:
-        dict: A dictionary containing the parsed key-value pairs.
-
-    Example:
-        >>> parse_command_line_args(['--name=John', '--age=25', '--is_student=True'])
-        {'name': 'John', 'age': 25, 'is_student': True}
-    """
+    
+    # Parses command line arguments and returns a dictionary of key-value pairs.
+    
     args = {}
     for text_arg in unparsed:
         if '=' not in text_arg:
@@ -406,13 +301,8 @@ def parse_command_line_args(unparsed: list[str]) -> dict:
 
 
 def download_file(url: str, path: str) -> None:
-    """
-    Downloads a file from the given URL and saves it to the specified path.
-
-    Args:
-        url (str): The URL of the file to download.
-        path (str): The path where the downloaded file will be saved.
-    """
+    # Downloads a file from the given URL and saves it to the specified path.
+    
     logger = getLogger()
     response = requests.get(url)
     if response.status_code == 200:
@@ -424,15 +314,8 @@ def download_file(url: str, path: str) -> None:
 
 
 def list_to_str(l: Union[list, str], remove_blank=False) -> str:
-    """
-    Converts a list or a string to a string representation.
-
-    Args:
-        l (Union[list, str]): The input list or string.
-
-    Returns:
-        str: The string representation of the input.
-    """
+    # Converts a list or a string to a string representation.
+    
     ret = ''
     if isinstance(l, list):
         ret = ', '.join(map(str, l))
@@ -444,15 +327,8 @@ def list_to_str(l: Union[list, str], remove_blank=False) -> str:
 
 
 def clean_text(raw_text: str) -> str:
-    """
-    Cleans the raw text by removing HTML tags, special characters, and extra spaces.
-
-    Args:
-        raw_text (str): The raw text to be cleaned.
-
-    Returns:
-        str: The cleaned text.
-    """
+    # Cleans the raw text by removing HTML tags, special characters, and extra spaces.
+    
     text = list_to_str(raw_text)
     text = html.unescape(text)
     text = text.strip()
@@ -463,13 +339,8 @@ def clean_text(raw_text: str) -> str:
     return text
 
 def init_device():
-    """
-    Set the visible devices for training. Supports multiple GPUs.
-
-    Returns:
-        torch.device: The device to use for training.
-
-    """
+    # Set the visible devices for training. Supports multiple GPUs.
+    
     import torch
     use_ddp = True if os.environ.get("WORLD_SIZE") else False # Check if DDP is enabled
     if torch.cuda.is_available():
@@ -488,7 +359,7 @@ def config_for_log(config: dict) -> dict:
 
 
 def num_tokens_from_string(string: str, encoding_name: str) -> int:
-    """Returns the number of tokens in a text string."""
+    # Returns the number of tokens in a text string.
     encoding = tiktoken.get_encoding(encoding_name)
     num_tokens = len(encoding.encode(string))
     return num_tokens

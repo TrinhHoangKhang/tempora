@@ -10,27 +10,27 @@ from genrec.tokenizer import AbstractTokenizer
 
 
 class RPGTokenizer(AbstractTokenizer):
-    """
-    An example when "codebook_size == 256, n_codebooks == 32":
-        0: padding
-        1-256: digit 1
-        257-512: digit 2
-        ...
-        7937-8192: digit 32
-        8193: eos
+    
+    # An example when "codebook_size == 256, n_codebooks == 32":
+    #     0: padding
+    #     1-256: digit 1
+    #     257-512: digit 2
+    #     ...
+    #     7937-8192: digit 32
+    #     8193: eos
 
-    Args:
-        config (dict): The configuration dictionary.
-        dataset (AbstractDataset): The dataset object.
+    # Args:
+    #     config (dict): The configuration dictionary.
+    #     dataset (AbstractDataset): The dataset object.
 
-    Attributes:
-        n_codebook_bits (int): The number of bits for the codebook.
-        index_factory (str): The index factory name for the OPQ algorithm.
-        item2tokens (dict): A dictionary mapping items to their semantic IDs.
-        base_user_id (int): The base user ID.
-        n_user_tokens (int): The number of user tokens.
-        eos_token (int): The end-of-sequence token.
-    """
+    # Attributes:
+    #     n_codebook_bits (int): The number of bits for the codebook.
+    #     index_factory (str): The index factory name for the OPQ algorithm.
+    #     item2tokens (dict): A dictionary mapping items to their semantic IDs.
+    #     base_user_id (int): The base user ID.
+    #     n_user_tokens (int): The number of user tokens.
+    #     eos_token (int): The end-of-sequence token.
+    
     def __init__(self, config: dict, dataset: AbstractDataset):
         self.n_codebook_bits = self._get_codebook_bits(config['codebook_size'])
         self.index_factory = f'OPQ{config["n_codebook"]},IVF1,PQ{config["n_codebook"]}x{self.n_codebook_bits}'
@@ -51,22 +51,22 @@ class RPGTokenizer(AbstractTokenizer):
 
     @property
     def n_digit(self):
-        """Number of product quantization digits."""
+        # Number of product quantization digits.
         return self.config['n_codebook']
 
     @property
     def codebook_size(self):
-        """Number of possible values per digit."""
+        # Number of possible values per digit.
         return self.config['codebook_size']
 
     @property
     def max_token_seq_len(self) -> int:
-        """Maximum sequence length."""
+        # Maximum sequence length.
         return self.config['max_item_seq_len']
 
     @property
     def vocab_size(self) -> int:
-        """Vocabulary size (includes special tokens)."""
+        # Vocabulary size (includes special tokens).
         return self.eos_token + 1
 
     def _get_codebook_bits(self, n_codebook):
@@ -75,7 +75,7 @@ class RPGTokenizer(AbstractTokenizer):
         return int(x)
 
     def _encode_sent_emb(self, dataset: AbstractDataset, output_path: str):
-        """Encode sentence embeddings and save to output_path."""
+        # Encode sentence embeddings and save to output_path.
         assert self.config['metadata'] == 'sentence', \
             'Tokenizer only supports sentence metadata.'
         self.log(f'[TOKENIZER] Encoding sentence embeddings with {self.config["sent_emb_model"]}...')
@@ -137,15 +137,15 @@ class RPGTokenizer(AbstractTokenizer):
         return sent_embs
 
     def _get_items_for_training(self, dataset: AbstractDataset) -> np.ndarray:
-        """
-        Get a boolean mask indicating which items are used for training.
+    
+        # Get a boolean mask indicating which items are used for training.
 
-        Args:
-            dataset (AbstractDataset): The dataset containing the item sequences.
+        # Args:
+        #     dataset (AbstractDataset): The dataset containing the item sequences.
 
-        Returns:
-            np.ndarray: A boolean mask indicating which items are used for training.
-        """
+        # Returns:
+        #     np.ndarray: A boolean mask indicating which items are used for training.
+        
         self.log(f'[TOKENIZER] Marking all the IDs of all the items in the training set as True...')
         items_for_training = set()
         for item_seq in dataset.split_data['train']['item_seq']:
@@ -159,7 +159,7 @@ class RPGTokenizer(AbstractTokenizer):
         return mask
 
     def _generate_semantic_id_opq(self, sent_embs, sem_ids_path, train_mask):
-        """Generate 32-digit semantic codes using OPQ algorithm."""
+        # Generate 32-digit semantic codes using OPQ algorithm.
         import faiss
         
         # Setup GPU/CPU resources
@@ -228,15 +228,15 @@ class RPGTokenizer(AbstractTokenizer):
             json.dump(item2sem_ids, f)
 
     def _sem_ids_to_tokens(self, item2sem_ids: dict) -> dict:
-        """
-        Converts semantic IDs to tokens.
+    
+        # Converts semantic IDs to tokens.
 
-        Args:
-            item2sem_ids (dict): A dictionary mapping items to their corresponding semantic IDs.
+        # Args:
+        #     item2sem_ids (dict): A dictionary mapping items to their corresponding semantic IDs.
 
-        Returns:
-            dict: A dictionary mapping items to their corresponding tokens.
-        """
+        # Returns:
+        #     dict: A dictionary mapping items to their corresponding tokens.
+        
         self.log(f'[TOKENIZER] Converting semantic IDs to tokens...')
         for item in item2sem_ids:
             tokens = list(item2sem_ids[item])
@@ -246,10 +246,10 @@ class RPGTokenizer(AbstractTokenizer):
         return item2sem_ids
 
     def _init_tokenizer(self, dataset: AbstractDataset):
-        """
-        Load or generate semantic IDs for items.
-        Return a item2tokens dictionary.
-        """
+        
+        # Load or generate semantic IDs for items.
+        # Return a item2tokens dictionary.
+        
         sem_ids_path = os.path.join(
             dataset.cache_dir, 'processed',
             f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.sem_ids'
@@ -301,7 +301,7 @@ class RPGTokenizer(AbstractTokenizer):
         return item2tokens
 
     def _tokenize_first_n_items(self, item_seq: list) -> tuple:
-        """Tokenize first n items. Creates training examples with inputs shifted by 1."""
+        # Tokenize first n items. Creates training examples with inputs shifted by 1.
         input_ids = [self.item2id[item] for item in item_seq[:-1]]
         seq_lens = len(input_ids)
         attention_mask = [1] * seq_lens
@@ -316,7 +316,7 @@ class RPGTokenizer(AbstractTokenizer):
         return input_ids, attention_mask, labels, seq_lens
 
     def _tokenize_later_items(self, item_seq: list, pad_labels: bool = True) -> tuple:
-        """Tokenize middle/end items. Only last position produces loss."""
+        # Tokenize middle/end items. Only last position produces loss.
         input_ids = [self.item2id[item] for item in item_seq[:-1]]
         seq_lens = len(input_ids)
         attention_mask = [1] * seq_lens
@@ -333,7 +333,7 @@ class RPGTokenizer(AbstractTokenizer):
         return input_ids, attention_mask, labels, seq_lens
 
     def _debug_fmt_ids(self, ids: list, label: str = '', limit: int = 8) -> str:
-        """Format a token id list for compact debug printing (truncates long lists)."""
+        # Format a token id list for compact debug printing (truncates long lists).
         if len(ids) <= limit:
             preview = str(ids)
         else:
@@ -341,7 +341,7 @@ class RPGTokenizer(AbstractTokenizer):
         return f'{label}{preview}' if label else preview
 
     def tokenize_function(self, example: dict, split: str) -> dict:
-        """Tokenize example: sliding windows for training, last window for inference."""
+        # Tokenize example: sliding windows for training, last window for inference.
         max_item_seq_len = self.config['max_item_seq_len']
         item_seq = example['item_seq'][0]
 
@@ -454,7 +454,7 @@ class RPGTokenizer(AbstractTokenizer):
             }
 
     def tokenize(self, datasets: dict) -> dict:
-        """Apply tokenize_function to all splits and convert to PyTorch tensors."""
+        # Apply tokenize_function to all splits and convert to PyTorch tensors.
         tokenized_datasets = {}
 
         self.log(

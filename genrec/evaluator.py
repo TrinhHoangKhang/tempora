@@ -39,11 +39,11 @@ class Evaluator:
             print(f"true_labels[0]: {true_labels[0].tolist()}")
             self.debug_flag = False
             
-        '''
-        preds: (B, n_return_sequences=maxk)
-        true_labels: (B,) - single true label per example
-        pos_index: (B, maxk) boolean tensor indicating whether each prediction is correct
-        '''
+        
+        # preds: (B, n_return_sequences=maxk)
+        # true_labels: (B,) - single true label per example
+        # pos_index: (B, maxk) boolean tensor indicating whether each prediction is correct
+        
         assert preds.shape[1] == self.maxk, f"preds.shape[1] = {preds.shape[1]} != {self.maxk}"
         
         pos_index = torch.zeros((preds.shape[0], self.maxk), dtype=torch.bool)

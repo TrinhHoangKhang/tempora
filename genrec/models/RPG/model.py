@@ -8,7 +8,7 @@ from genrec.tokenizer import AbstractTokenizer
 
 
 class ResBlock(nn.Module):
-    """Residual block: x + SiLU(Linear(x)). Initialized as identity."""
+    # Residual block: x + SiLU(Linear(x)). Initialized as identity.
 
     def __init__(self, hidden_size):
         super().__init__()
@@ -17,12 +17,12 @@ class ResBlock(nn.Module):
         self.act = nn.SiLU()
 
     def forward(self, x):
-        """Apply residual connection: x + SiLU(Linear(x))."""
+        # Apply residual connection: x + SiLU(Linear(x)).
         return x + self.act(self.linear(x))
 
 
 class RPG(AbstractModel):
-    """GPT-2 Sequential Recommendation with 32-digit Product Quantization."""
+    # GPT-2 Sequential Recommendation with 32-digit Product Quantization.
     
     def __init__(
         self,
@@ -30,7 +30,7 @@ class RPG(AbstractModel):
         dataset: AbstractDataset,
         tokenizer: AbstractTokenizer
     ):
-        """Initialize RPG model with GPT-2 backbone and 32 prediction heads."""
+        # Initialize RPG model with GPT-2 backbone and 32 prediction heads.
         super(RPG, self).__init__(config, dataset, tokenizer)
 
         # Item ID -> 32 semantic digit codes
@@ -72,7 +72,7 @@ class RPG(AbstractModel):
         self.propagation_steps = config['propagation_steps']
 
     def _map_item_tokens(self) -> torch.Tensor:
-        """Create lookup table: item_id -> 32-digit semantic code."""
+        # Create lookup table: item_id -> 32-digit semantic code.
         item_id2tokens = torch.zeros((self.dataset.n_items, self.tokenizer.n_digit), dtype=torch.long)
         for item in self.tokenizer.item2tokens:
             item_id = self.dataset.item2id[item]
@@ -81,12 +81,12 @@ class RPG(AbstractModel):
 
     @property
     def n_parameters(self) -> str:
-        """
-        Calculate and format the number of trainable parameters.
-        
-        Returns:
-            str: Breakdown of embedding params, non-embedding params, and total
-        """
+        #
+        # Calculate and format the number of trainable parameters.
+        #
+        # Returns:
+        #     str: Breakdown of embedding params, non-embedding params, and total
+        #
         total_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         emb_params = sum(p.numel() for p in self.gpt2.get_input_embeddings().parameters() if p.requires_grad)
         return f'#Embedding parameters: {emb_params}\n' \
@@ -94,7 +94,7 @@ class RPG(AbstractModel):
                 f'#Total trainable parameters: {total_params}\n'
 
     def forward(self, batch: dict, return_loss=True) -> torch.Tensor:
-        """Predict 32-digit codes for next item in sequence. Compute loss if return_loss=True."""
+        # Predict 32-digit codes for next item in sequence. Compute loss if return_loss=True.
         
         # Token lookup and embedding
         input_tokens = self.item_id2tokens[batch['input_ids']]
@@ -155,7 +155,7 @@ class RPG(AbstractModel):
         return outputs
 
     def build_ii_sim_mat(self):
-        """Build item-item similarity matrix from semantic token embeddings."""
+        # Build item-item similarity matrix from semantic token embeddings.
         n_items = self.dataset.n_items
         n_digit = self.tokenizer.n_digit
         codebook_size = self.tokenizer.codebook_size
@@ -195,18 +195,18 @@ class RPG(AbstractModel):
         return item_item_sim
 
     def build_adjacency_list(self, item_item_sim):
-        """Find top n_edges nearest neighbors for each item."""
+        # Find top n_edges nearest neighbors for each item.
         return torch.topk(item_item_sim, k=self.n_edges, dim=-1).indices
 
     def init_graph(self):
-        """Initialize k-NN graph for graph-constrained decoding."""
+        # Initialize k-NN graph for graph-constrained decoding.
         self.tokenizer.log("Building item-item similarity matrix...")
         item_item_sim = self.build_ii_sim_mat()
         self.adjacency = self.build_adjacency_list(item_item_sim)
         self.tokenizer.log("Graph initialized.")
 
     def graph_propagation(self, token_logits, n_return_sequences):
-        """Graph-based search constrained by k-NN graph."""
+        # Graph-based search constrained by k-NN graph.
         batch_size = token_logits.shape[0]
         visited_nodes = {}
         for batch_id in range(batch_size):
@@ -252,17 +252,17 @@ class RPG(AbstractModel):
         return topk_nodes_sorted[:,:n_return_sequences].unsqueeze(-1), visited_counts
 
     def generate(self, batch, n_return_sequences=1, return_loss=False):
-        """Predict next items. Use graph search if generate_w_decoding_graph=True, else direct top-k.
+        # Predict next items. Use graph search if generate_w_decoding_graph=True, else direct top-k.
         
-        Args:
-            batch: Input batch
-            n_return_sequences: Number of top items to return
-            return_loss: If True, also return validation loss
+        # Args:
+        #     batch: Input batch
+        #     n_return_sequences: Number of top items to return
+        #     return_loss: If True, also return validation loss
         
-        Returns:
-            preds: Predicted item IDs
-            loss (optional): Validation loss if return_loss=True
-        """
+        # Returns:
+        #     preds: Predicted item IDs
+        #     loss (optional): Validation loss if return_loss=True
+        
         # Forward pass
         outputs = self.forward(batch, return_loss=return_loss)
         

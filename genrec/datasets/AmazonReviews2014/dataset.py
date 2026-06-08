@@ -11,21 +11,6 @@ from genrec.utils import download_file, clean_text
 
 
 class AmazonReviews2014(AbstractDataset):
-    """
-    A class representing the Amazon Reviews 2014 dataset.
-
-    Args:
-        config (dict): A dictionary containing the configuration parameters for the dataset.
-
-    Attributes:
-        config (dict): A dictionary containing the configuration parameters for the dataset.
-        logger (Logger): An instance of the logger for logging information.
-        category (str): The category of the dataset.
-        cache_dir (str): The directory path for caching the dataset.
-        all_item_seqs (dict): A dictionary containing all the user-item sequences.
-        id_mapping (dict): A dictionary containing data maps.
-        item2meta (dict): A dictionary containing the item metadata.
-    """
 
     def __init__(self, config: dict):
         super(AmazonReviews2014, self).__init__(config)
@@ -42,12 +27,8 @@ class AmazonReviews2014(AbstractDataset):
         self._download_and_process_raw()
 
     def _check_available_category(self):
-        """
-        Checks if the `self.category` is available in the dataset.
-
-        Raises:
-            AssertionError: If the specified category is not available.
-        """
+        # Checks if the `self.category` is available in the dataset.
+        
         available_categories = [
             'Books',
             'Electronics',
@@ -79,16 +60,8 @@ class AmazonReviews2014(AbstractDataset):
             f'Available categories: {available_categories}'
 
     def _download_raw(self, path: str, type: str = 'reviews') -> str:
-        """
-        Downloads the raw data file from the specified URL and saves it locally.
-
-        Args:
-            path (str): The path to the directory where the file will be saved.
-            type (str, optional): The type of data to download. Defaults to 'reviews'.
-
-        Returns:
-            str: The local file path where the downloaded file is saved.
-        """
+        # Downloads the raw data file from the specified URL and saves it locally.
+        
         url = f'https://snap.stanford.edu/data/amazon/productGraph/categoryFiles/{type}_{self.category}{"_5" if type == "reviews" else ""}.json.gz'
         base_name = os.path.basename(url)
         local_filepath = os.path.join(path, base_name)
@@ -101,30 +74,16 @@ class AmazonReviews2014(AbstractDataset):
         return local_filepath
 
     def _parse_gz(self, path: str):
-        """
-        Parse a gzipped file and yield each line as a dict.
-
-        Args:
-            path (str): The path to the gzipped file.
-
-        Yields:
-            object: Each line of the gzipped file, parsed as a dict.
-        """
+        # Parse a gzipped file and yield each line as a dict.
+        
         g = gzip.open(path, 'r')
         for l in g:
             l = l.replace(b'true', b'True').replace(b'false', b'False')
             yield eval(l)
 
     def _load_reviews(self, path: str) -> list:
-        """
-        Load reviews from a given path.
-
-        Args:
-            path (str): The path to the file containing the reviews.
-
-        Returns:
-            list: A list of tuples representing the reviews. Each tuple contains the user ID, item ID, and the interaction timestamp.
-        """
+        # Load reviews from a given path.
+        
         self.log(f'[DATASET] Loading reviews from {path}...')
         reviews = []
         for inter in self._parse_gz(path):
@@ -136,15 +95,8 @@ class AmazonReviews2014(AbstractDataset):
         return reviews
 
     def _get_item_seqs(self, reviews: list[tuple]) -> dict:
-        """
-        Group the reviews by user and sort the items by time.
-
-        Args:
-            reviews (list[tuple]): A list of tuples representing the reviews. Each tuple contains the user, item, and time.
-
-        Returns:
-            dict: A dictionary where the keys are the users and the values are lists of items sorted by time.
-        """
+        # Group the reviews by user and sort the items by time.
+        
         self.log('[DATASET] Grouping reviews by user and sorting by time...')
         # Group reviews by user
         item_seqs = defaultdict(list)
@@ -160,23 +112,23 @@ class AmazonReviews2014(AbstractDataset):
         return item_seqs
 
     def _remap_ids(self, item_seqs: dict) -> tuple[dict, dict]:
-        """
-        Remaps the user and item IDs in the given item sequences dictionary.
+        
+        # Remaps the user and item IDs in the given item sequences dictionary.
 
-        Args:
-            item_seqs (dict): A dictionary containing user-item sequences, where the keys are the users and the values are lists of items sorted by time.
+        # Args:
+        #     item_seqs (dict): A dictionary containing user-item sequences, where the keys are the users and the values are lists of items sorted by time.
 
-        Returns:
-            all_item_seqs (dict): A dictionary containing the user-item sequences.
-            id_mapping (dict): A dictionary containing the mapping between raw and remapped user and item IDs.
-                - user2id (dict): A dictionary mapping raw user IDs to remapped user IDs.
-                - item2id (dict): A dictionary mapping raw item IDs to remapped item IDs.
-                - id2user (list): A list mapping remapped user IDs to raw user IDs.
-                - id2item (list): A list mapping remapped item IDs to raw item IDs.
+        # Returns:
+        #     all_item_seqs (dict): A dictionary containing the user-item sequences.
+        #     id_mapping (dict): A dictionary containing the mapping between raw and remapped user and item IDs.
+        #         - user2id (dict): A dictionary mapping raw user IDs to remapped user IDs.
+        #         - item2id (dict): A dictionary mapping raw item IDs to remapped item IDs.
+        #         - id2user (list): A list mapping remapped user IDs to raw user IDs.
+        #         - id2item (list): A list mapping remapped item IDs to raw item IDs.
 
-        Note:
-            The remapped user and item IDs start from 1. The ID 0 is reserved for padding `[PAD]`.
-        """
+        # Note:
+        #     The remapped user and item IDs start from 1. The ID 0 is reserved for padding `[PAD]`.
+        
         self.log('[DATASET] Remapping user and item IDs...')
         for user, items in item_seqs.items():
             if user not in self.id_mapping['user2id']:
@@ -200,17 +152,12 @@ class AmazonReviews2014(AbstractDataset):
         input_path: str,
         output_path: str
     ) -> tuple[dict, dict]:
-        """
-        Process the reviews from the input path and save the data to the output path.
-
-        Args:
-            input_path (str): The path to the input file containing the reviews.
-            output_path (str): The path to save the data.
-
-        Returns:
-            all_item_seqs (dict): A dictionary containing the user-item sequences.
-            id_mapping (dict): A dictionary containing data maps.
-        """
+        
+        # Process the reviews from the input path and save the data to the output path.
+        # Returns:
+        #     all_item_seqs (dict): A dictionary containing the user-item sequences.
+        #     id_mapping (dict): A dictionary containing data maps.
+        
         # Check if the processed data already exists
         seq_file = os.path.join(output_path, 'all_item_seqs.json')
         id_mapping_file = os.path.join(output_path, 'id_mapping.json')
@@ -258,16 +205,7 @@ class AmazonReviews2014(AbstractDataset):
         path: str,
         item2id: dict
     ) -> dict:
-        """
-        Load metadata from a given path and filter it based on the provided data maps.
-
-        Args:
-            path (str): The path to the metadata file.
-            item2id (dict): A dictionary mapping item raw tokens (ASIN) to their corresponding IDs.
-
-        Returns:
-            dict: A dictionary containing the filtered metadata.
-        """
+        # Load metadata from a given path and filter it based on the provided data maps.
         self.log('[DATASET] Loading metadata...')
         data = {}
         item_asins = set(item2id.keys())
@@ -279,15 +217,7 @@ class AmazonReviews2014(AbstractDataset):
         return data
 
     def _sent_process(self, raw: str) -> str:
-        """
-        Process the raw input according to the raw data type and return a processed sentence.
-
-        Args:
-            raw (str): The raw input to be processed.
-
-        Returns:
-            str: The processed sentence.
-        """
+        # Process the raw input according to the raw data type and return a processed sentence.
         sentence = ""
         if isinstance(raw, float):
             sentence += str(raw)
@@ -310,15 +240,7 @@ class AmazonReviews2014(AbstractDataset):
         self,
         metadata: dict
     ) -> dict:
-        """
-        Extracts meta sentences from the given metadata dictionary.
-
-        Args:
-            metadata (dict): A dictionary containing metadata information for each item.
-
-        Returns:
-            dict: A dictionary mapping items to their corresponding meta sentences.
-        """
+        # Extracts meta sentences from the given metadata dictionary.
         self.log('[DATASET] Extracting meta sentences...')
         item2meta = {}
         for item, meta in tqdm(metadata.items()):
@@ -340,19 +262,8 @@ class AmazonReviews2014(AbstractDataset):
         input_path: str,
         output_path: str
     ) -> Optional[dict]:
-        """
-        Process metadata based on the specified process type.
+        #  Process metadata based on the specified process type.
 
-        Args:
-            input_path (str): The path to the input metadata file.
-            output_path (str): The path to save the processed metadata file.
-
-        Returns:
-            dict: A dictionary containing the item metadata.
-
-        Raises:
-            NotImplementedError: If the metadata processing type is not implemented.
-        """
         process_mode = self.config['metadata']
         meta_file = os.path.join(output_path, f'metadata.{process_mode}.json')
         if os.path.exists(meta_file):
@@ -388,16 +299,6 @@ class AmazonReviews2014(AbstractDataset):
         return item2meta
 
     def _download_and_process_raw(self):
-        """
-        Downloads and processes the raw data files.
-
-        This method downloads the raw data files for reviews and metadata from the specified path,
-        processes the raw data, and saves the processed data in the cache directory.
-
-        Returns:
-            None
-        """
-        # Download raw data files
         self.log('[DATASET] ========== DOWNLOADING RAW DATA FILES... ==========')
         raw_data_path = os.path.join(self.cache_dir, 'raw')
         os.makedirs(raw_data_path, exist_ok=True)

@@ -28,33 +28,16 @@ class AbstractDataset:
                 f'\tNote: The number of users and items are increased by 1, due to user2id and item2id having padding (\'user2id\': {{\'[PAD]\': 0}})'
 
     @property
-    def n_users(self):
-        """
-        Returns the number of users in the dataset.
-
-        Returns:
-            int: The number of users in the dataset.
-        """
+    def n_users(self):        
         return len(self.user2id)
 
     @property
     def n_items(self):
-        """
-        Returns the total number of items in the dataset.
-
-        Returns:
-            int: The number of items in the dataset.
-        """
         return len(self.item2id)
 
     @property
     def n_interactions(self):
-        """
-        Returns the total number of interactions in the dataset.
-
-        Returns:
-            int: The total number of interactions.
-        """
+        # Returns the total number of interactions in the dataset.
         n_inters = 0
         for user in self.all_item_seqs:
             n_inters += len(self.all_item_seqs[user])
@@ -62,50 +45,28 @@ class AbstractDataset:
 
     @property
     def avg_item_seq_len(self):
-        """
-        Returns the average length of item sequences in the dataset.
-
-        Returns:
-            float: The average length of item sequences.
-        """
         return self.n_interactions / self.n_users
 
     @property
     def user2id(self):
-        """
-        Returns the user-to-id mapping.
-
-        Returns:
-            dict: The user-to-id mapping.
-        """
         return self.id_mapping['user2id']
 
     @property
     def item2id(self):
-        """
-        Returns the item-to-id mapping.
-
-        Returns:
-            dict: The item-to-id mapping.
-        """
         return self.id_mapping['item2id']
 
     def _download_and_process_raw(self):
-        """
-        This method should be implemented in the subclass.
-        It is responsible for downloading and processing the raw data.
-        """
         raise NotImplementedError('This method should be implemented in the subclass')
 
     def _leave_one_out(self):
-        """
-        Splits the dataset into train, validation, and test sets using the leave-one-out strategy.
+        
+        # Splits the dataset into train, validation, and test sets using the leave-one-out strategy.
 
-        Returns:
-            dict: A dictionary containing the train, validation, and test datasets.
-                  Each dataset is represented as a dictionary with 'user' and 'item_seq' keys.
-                  The 'user' key contains a list of users, and the 'item_seq' key contains a list of item sequences.
-        """
+        # Returns:
+        #     dict: A dictionary containing the train, validation, and test datasets.
+        #           Each dataset is represented as a dictionary with 'user' and 'item_seq' keys.
+        #           The 'user' key contains a list of users, and the 'item_seq' key contains a list of item sequences.
+        
         self.log('[DATASET] Building leave-one-out train/val/test splits...')
 
         datasets = {'train': {'user': [], 'item_seq': []},
@@ -178,12 +139,7 @@ class AbstractDataset:
         return datasets
 
     def split(self):
-        """
-        Split the dataset into train, validation, and test sets based on the specified split strategy.
-
-        Returns:
-            datasets (dict): A dictionary containing the train and test datasets.
-        """
+        # Split the dataset into train, validation, and test sets based on the specified split strategy.
         if self.split_data is not None:
             self.log('[DATASET] Using cached train/val/test splits')
             return self.split_data

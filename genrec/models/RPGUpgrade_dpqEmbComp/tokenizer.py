@@ -7,23 +7,22 @@ from genrec.models.RPG.tokenizer import RPGTokenizer
 
 
 class RPGUpgrade_dpqEmbCompTokenizer(RPGTokenizer):
-    """
-    Extends RPGTokenizer to additionally expose:
-        self.sent_embs    – np.ndarray (n_items, d), item_id-indexed (row 0 = zeros)
-        self.opq_rotation – np.ndarray (d, d) or None if index unavailable
-        self.pq_codebooks – np.ndarray (D, K, d/D) or None if index unavailable
+    
+    # Extends RPGTokenizer to additionally expose:
+    #     self.sent_embs    – np.ndarray (n_items, d), item_id-indexed (row 0 = zeros)
+    #     self.opq_rotation – np.ndarray (d, d) or None if index unavailable
+    #     self.pq_codebooks – np.ndarray (D, K, d/D) or None if index unavailable
 
-    These are used by RPGUpgrade to warm-initialize the DPQ linear projection and
-    Key/Value codebooks.
-    """
+    # These are used by RPGUpgrade to warm-initialize the DPQ linear projection and
+    # Key/Value codebooks.
 
     def _init_tokenizer(self, dataset: AbstractDataset):
-        """
-        Same as RPGTokenizer but also:
-          1. Keeps the sentence embeddings in self.sent_embs
-          2. Saves the FAISS index alongside .sem_ids for warm-init extraction
-          3. Extracts OPQ rotation R and PQ codebooks K for DPQ warm-initialization
-        """
+        
+        # Same as RPGTokenizer but also:
+        #   1. Keeps the sentence embeddings in self.sent_embs
+        #   2. Saves the FAISS index alongside .sem_ids for warm-init extraction
+        #   3. Extracts OPQ rotation R and PQ codebooks K for DPQ warm-initialization
+        
         sem_ids_path = os.path.join(
             dataset.cache_dir, 'processed',
             f'{os.path.basename(self.config["sent_emb_model"])}_{self.index_factory}.sem_ids'
@@ -207,16 +206,16 @@ class RPGUpgrade_dpqEmbCompTokenizer(RPGTokenizer):
     # Helper: extract R and K from saved FAISS index
     # ------------------------------------------------------------------
     def _extract_opq_params(self, index_path: str, emb_dim: int):
-        """
-        Extracts:
-            self.opq_rotation – (d, d) float32 numpy array  (OPQ linear transform)
-            self.pq_codebooks – (D, K, d/D) float32 numpy array  (PQ centroids)
+    
+        # Extracts:
+        #     self.opq_rotation – (d, d) float32 numpy array  (OPQ linear transform)
+        #     self.pq_codebooks – (D, K, d/D) float32 numpy array  (PQ centroids)
 
-        FAISS OPQ index structure:
-            IndexPreTransform
-              └── chain[0]: OPQMatrix (LinearTransform, stores A of shape d×d)
-              └── index:    IndexIVFPQ (stores pq.centroids of shape D*K*(d/D))
-        """
+        # FAISS OPQ index structure:
+        #     IndexPreTransform
+        #       └── chain[0]: OPQMatrix (LinearTransform, stores A of shape d×d)
+        #       └── index:    IndexIVFPQ (stores pq.centroids of shape D*K*(d/D))
+        
         import faiss
 
         index = faiss.read_index(index_path)

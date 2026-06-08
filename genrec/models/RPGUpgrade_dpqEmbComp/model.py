@@ -2,20 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2Config, GPT2Model
-
 from genrec.dataset import AbstractDataset
 from genrec.model import AbstractModel
 from genrec.tokenizer import AbstractTokenizer
 
-
-# ---------------------------------------------------------------------------
-# DPQ Module
-# ---------------------------------------------------------------------------
-
 class DPQ(nn.Module):
-    """
-    Differentiable Product Quantization.
-    """
+    # Differentiable Product Quantization.
 
     def __init__(self, d: int, D: int, n_clusters: int, v_dim: int, tokenizer):
         super().__init__()
@@ -63,25 +55,25 @@ class DPQ(nn.Module):
         self.V = nn.Parameter(V_init)
 
     def forward(self, x: torch.Tensor, tau: float = 1.0) -> dict:
-        """
-        Notation used below:
-            B : batch size
-            L : sequence length
-            d : full sentence embedding dim
-            D : number of PQ subspaces
-            K : number of clusters per subspace (n_clusters)
-            v : value dimension per subspace (v_dim)
+        
+        # Notation used below:
+        #     B : batch size
+        #     L : sequence length
+        #     d : full sentence embedding dim
+        #     D : number of PQ subspaces
+        #     K : number of clusters per subspace (n_clusters)
+        #     v : value dimension per subspace (v_dim)
 
-        Args:
-            x   : (B, L, d) sentence embeddings
-            tau : Gumbel-Softmax temperature (lower = harder assignments)
+        # Args:
+        #     x   : (B, L, d) sentence embeddings
+        #     tau : Gumbel-Softmax temperature (lower = harder assignments)
 
-        Returns a dict with keys:
-            'ste'   : (B, L, D * v_dim)  STE output used for downstream layers
-            'soft'  : (B, L, D * v_dim)  soft reconstruction (gradient path)
-            'hard'  : (B, L, D * v_dim)  hard reconstruction (forward value)
-            'codes' : (B, L, D)          discrete code indices (long tensor)
-        """
+        # Returns a dict with keys:
+        #     'ste'   : (B, L, D * v_dim)  STE output used for downstream layers
+        #     'soft'  : (B, L, D * v_dim)  soft reconstruction (gradient path)
+        #     'hard'  : (B, L, D * v_dim)  hard reconstruction (forward value)
+        #     'codes' : (B, L, D)          discrete code indices (long tensor)
+        
         B, L, _ = x.shape
 
         # 1) Rotate from original sentence-embedding space to PQ-aligned space.
@@ -143,13 +135,8 @@ class DPQ(nn.Module):
             'codes': codes,
         }
 
-
-# ---------------------------------------------------------------------------
-# Shared building block (same as RPG)
-# ---------------------------------------------------------------------------
-
 class ResBlock(nn.Module):
-    """Residual block: x + SiLU(Linear(x)).  Initialized as identity."""
+    # Residual block: x + SiLU(Linear(x)).  Initialized as identity.
 
     def __init__(self, hidden_size: int):
         super().__init__()
@@ -160,27 +147,21 @@ class ResBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.act(self.linear(x))
 
-
-# ---------------------------------------------------------------------------
-# RPGUpgrade model
-# ---------------------------------------------------------------------------
-
 class RPGUpgrade_dpqEmbComp(AbstractModel):
-    """
-    GPT-2 Sequential Recommendation with end-to-end Differentiable PQ.
+    # GPT-2 Sequential Recommendation with end-to-end Differentiable PQ.
 
-    Compared to RPG the only change is in how input embeddings are produced:
-        RPG       : item_ids → item2tokens (frozen) → GPT-2 wte → mean-pool → GPT-2
-        RPGUpgrade: item_ids → frozen sent_emb_table → DPQ (learnable) → proj → GPT-2
+    # Compared to RPG the only change is in how input embeddings are produced:
+    #     RPG       : item_ids → item2tokens (frozen) → GPT-2 wte → mean-pool → GPT-2
+    #     RPGUpgrade: item_ids → frozen sent_emb_table → DPQ (learnable) → proj → GPT-2
 
-    Everything downstream (prediction heads, loss, generate) is identical.
+    # Everything downstream (prediction heads, loss, generate) is identical.
 
-    Config keys specific to RPGUpgrade:
-        dpq_v_dim (int, optional): Value vector dimension per subspace.
-            Defaults to n_embd // n_codebook, so DPQ output = n_embd directly
-            and no projection layer is needed.
-        quantizer_temperature (float): Initial Gumbel-Softmax temperature τ.
-    """
+    # Config keys specific to RPGUpgrade:
+    #     dpq_v_dim (int, optional): Value vector dimension per subspace.
+    #         Defaults to n_embd // n_codebook, so DPQ output = n_embd directly
+    #         and no projection layer is needed.
+    #     quantizer_temperature (float): Initial Gumbel-Softmax temperature τ.
+    
 
     def __init__(
         self,
@@ -277,7 +258,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         self.gumbel_tau_decay: float = config.get('quantizer_temperature_decay', 0.9)
 
     def anneal_tau(self):
-        """Exponential decay with floor: tau <- max(tau_min, tau * tau_decay)."""
+        # Exponential decay with floor: tau <- max(tau_min, tau * tau_decay).
         self.gumbel_tau = max(
             self.gumbel_tau_min,
             self.gumbel_tau * self.gumbel_tau_decay,
@@ -288,7 +269,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
     # ------------------------------------------------------------------
 
     def _map_item_tokens(self) -> torch.Tensor:
-        """Create lookup table: item_id → 32-digit semantic code (same as RPG)."""
+        # Create lookup table: item_id → 32-digit semantic code (same as RPG).
         item_id2tokens = torch.zeros(
             (self.dataset.n_items, self.tokenizer.n_digit), dtype=torch.long
         )
@@ -298,23 +279,23 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         return item_id2tokens
 
     def _get_all_item_embs(self) -> torch.Tensor:
-        """
-        Return normalized DPQ hard-reconstructed embeddings for all real items.
+        
+        # Return normalized DPQ hard-reconstructed embeddings for all real items.
 
-        Returns:
-            item_embs: (n_items - 1, dpq_out_dim), item id 1..n_items-1 maps to row 0..n_items-2.
-        """
+        # Returns:
+        #     item_embs: (n_items - 1, dpq_out_dim), item id 1..n_items-1 maps to row 0..n_items-2.
+        
         all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
         item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
         return F.normalize(item_embs.squeeze(0), dim=-1)                 # (n_items-1, dpq_out_dim)
 
     def build_ii_sim_mat(self) -> torch.Tensor:
-        """
-        Build item-item similarity matrix from DPQ hard embeddings.
+        
+        # Build item-item similarity matrix from DPQ hard embeddings.
 
-        Similarity is cosine in DPQ space (dot product after L2 normalization),
-        then mapped from [-1, 1] to [0, 1] for consistency with RPG graph init.
-        """
+        # Similarity is cosine in DPQ space (dot product after L2 normalization),
+        # then mapped from [-1, 1] to [0, 1] for consistency with RPG graph init.
+        
         n_items = self.dataset.n_items
         item_embs = self._get_all_item_embs()  # (n_items-1, dpq_out_dim), ids 1.. map to rows 0..
         item_item_sim = torch.zeros(
@@ -336,24 +317,24 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         return item_item_sim
 
     def build_adjacency_list(self, item_item_sim: torch.Tensor) -> torch.Tensor:
-        """Find top-k nearest neighbors for each item."""
+        # Find top-k nearest neighbors for each item.
         return torch.topk(item_item_sim, k=self.n_edges, dim=-1).indices
 
     def init_graph(self):
-        """Initialize k-NN graph for graph-constrained decoding."""
+        # Initialize k-NN graph for graph-constrained decoding.
         self.tokenizer.log("Building item-item similarity matrix...")
         item_item_sim = self.build_ii_sim_mat()
         self.adjacency = self.build_adjacency_list(item_item_sim)
         self.tokenizer.log("Graph initialized.")
 
     def graph_propagation(self, item_logits: torch.Tensor, n_return_sequences: int):
-        """
-        Graph-based decoding in item space.
+        
+        # Graph-based decoding in item space.
 
-        Args:
-            item_logits: (B, n_items-1), scores for item ids 1..n_items-1
-            n_return_sequences: number of final candidates to return
-        """
+        # Args:
+        #     item_logits: (B, n_items-1), scores for item ids 1..n_items-1
+        #     n_return_sequences: number of final candidates to return
+        
         batch_size = item_logits.shape[0]
         visited_nodes = {batch_id: set() for batch_id in range(batch_size)}
 
@@ -403,21 +384,21 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
 
 
     def forward(self, batch: dict, return_loss: bool = True):
-        """
-        Symbols:
-            B : batch size
-            L : sequence length
-            d : sentence embedding dimension
-            E : GPT hidden dimension (config['n_embd'])
-            H : number of prediction heads (= tokenizer.n_digit)
-            M : number of valid training positions in this batch (label != -100)
-            I : number of real items (= n_items - 1, excluding padding id 0)
+        
+        # Symbols:
+        #     B : batch size
+        #     L : sequence length
+        #     d : sentence embedding dimension
+        #     E : GPT hidden dimension (config['n_embd'])
+        #     H : number of prediction heads (= tokenizer.n_digit)
+        #     M : number of valid training positions in this batch (label != -100)
+        #     I : number of real items (= n_items - 1, excluding padding id 0)
 
-        1. Look up frozen sentence embeddings for each item in the sequence.
-        2. Pass through DPQ → STE output feeds into GPT-2.
-        3. Apply prediction heads.
-        4. Optionally compute cross-entropy loss over labeled positions.
-        """
+        # 1. Look up frozen sentence embeddings for each item in the sequence.
+        # 2. Pass through DPQ → STE output feeds into GPT-2.
+        # 3. Apply prediction heads.
+        # 4. Optionally compute cross-entropy loss over labeled positions.
+        
 
         # 1) Item id lookup.
         #    batch['input_ids']: (B, L) integer item ids
@@ -488,18 +469,18 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         return outputs
 
     def generate(self, batch: dict, n_return_sequences: int = 1, return_loss: bool = False):
-        """
-        Predict next items.
+        
+        # Predict next items.
 
-        Args:
-            batch               : Input batch dict.
-            n_return_sequences  : How many top items to return.
-            return_loss         : If True, also return the validation loss.
+        # Args:
+        #     batch               : Input batch dict.
+        #     n_return_sequences  : How many top items to return.
+        #     return_loss         : If True, also return the validation loss.
 
-        Returns:
-            preds               : (B, n_return_sequences, 1) item IDs
-            loss (optional)     : scalar tensor, only when return_loss=True
-        """
+        # Returns:
+        #     preds               : (B, n_return_sequences, 1) item IDs
+        #     loss (optional)     : scalar tensor, only when return_loss=True
+        
         outputs = self.forward(batch, return_loss=return_loss)
 
         # Gather final hidden state at each sample's last valid timestep:

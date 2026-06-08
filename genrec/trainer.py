@@ -16,28 +16,28 @@ from genrec.utils import get_file_name, get_total_steps, config_for_log, log
 
 
 class Trainer:
-    """
-    A class that handles the training process for a model.
+    
+    # A class that handles the training process for a model.
 
-    Args:
-        config (dict): The configuration parameters for training.
-        model (AbstractModel): The model to be trained.
-        tokenizer (AbstractTokenizer): The tokenizer used for tokenizing the data.
+    # Args:
+    #     config (dict): The configuration parameters for training.
+    #     model (AbstractModel): The model to be trained.
+    #     tokenizer (AbstractTokenizer): The tokenizer used for tokenizing the data.
 
-    Attributes:
-        config (dict): The configuration parameters for training.
-        model (AbstractModel): The model to be trained.
-        evaluator (Evaluator): The evaluator used for evaluating the model.
-        logger (Logger): The logger used for logging training progress.
-        project_dir (str): The directory path for saving experiment logs.
-        accelerator (Accelerator): The accelerator used for distributed training
-        saved_model_ckpt (str): The file path for saving the trained model checkpoint.
+    # Attributes:
+    #     config (dict): The configuration parameters for training.
+    #     model (AbstractModel): The model to be trained.
+    #     evaluator (Evaluator): The evaluator used for evaluating the model.
+    #     logger (Logger): The logger used for logging training progress.
+    #     project_dir (str): The directory path for saving experiment logs.
+    #     accelerator (Accelerator): The accelerator used for distributed training
+    #     saved_model_ckpt (str): The file path for saving the trained model checkpoint.
 
-    Methods:
-        fit(train_dataloader, val_dataloader): Trains the model using the provided training and validation dataloaders.
-        evaluate(dataloader, split='test'): Evaluate the model on the given dataloader.
-        end(): Ends the training process and releases any used resources.
-    """
+    # Methods:
+    #     fit(train_dataloader, val_dataloader): Trains the model using the provided training and validation dataloaders.
+    #     evaluate(dataloader, split='test'): Evaluate the model on the given dataloader.
+    #     end(): Ends the training process and releases any used resources.
+    
 
     def __init__(self, config: dict, model: AbstractModel, tokenizer: AbstractTokenizer):
         self.config = config
@@ -68,13 +68,6 @@ class Trainer:
         return wandb_kwargs
 
     def fit(self, train_dataloader, val_dataloader):
-        """
-        Trains the model using the provided training and validation dataloaders.
-
-        Args:
-            train_dataloader: The dataloader for training data.
-            val_dataloader: The dataloader for validation data.
-        """
         # ============ Initialize Optimizer ============
         optimizer = AdamW(
             self.model.parameters(),
@@ -199,16 +192,10 @@ class Trainer:
         return best_epoch, best_val_score
 
     def evaluate(self, dataloader, split='test'):
-        """
-        Evaluate the model on the given dataloader.
-
-        Args:
-            dataloader (torch.utils.data.DataLoader): The dataloader to evaluate on.
-            split (str, optional): The split name. Defaults to 'test'.
-
-        Returns:
-            OrderedDict: A dictionary containing the evaluation results.
-        """
+        #  Evaluate the model on the given dataloader
+        #  Returns:
+        #     OrderedDict: A dictionary containing the evaluation results.
+        
         self.model.eval()  # Set model to evaluation mode (disable dropout, etc.)
         loss_key = f'{split}_loss'
         all_results = defaultdict(list)
@@ -257,9 +244,6 @@ class Trainer:
 
 
     def end(self):
-        """
-        Ends the training process and releases any used resources
-        """
         self.accelerator.end_training()
 
     def log(self, message, level='info'):
