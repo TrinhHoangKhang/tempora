@@ -233,6 +233,10 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             *[ResBlock(config['n_embd']) for _ in range(self.n_pred_head)]
         )
 
+        # Add this to bridge the dimension gap for MTP!
+        v_dim = config.get('dpq_v_dim', config['n_embd'] // config['n_codebook'])
+        self.head_to_v_dim = nn.Linear(config['n_embd'], v_dim)
+        
         # ------------------------------------------------------------------
         # Item-id → 32-digit token lookup  (for loss & generate, same as RPG)
         # ------------------------------------------------------------------
@@ -431,39 +435,44 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         # 5. Loss
         if return_loss:
             assert 'labels' in batch, 'Batch must contain labels.'
-
-            # labels: (B, L) with -100 at ignore positions (padding / no supervision)
-            # label_mask (flattened): (B*L,) bool
+            
+            # Mask to filter out padding (-100)
             label_mask = batch['labels'].view(-1) != -100
+            
+            # Get the ground truth item IDs and fetch their continuous embeddings
+            target_ids = batch['labels'].view(-1)[label_mask] 
+            target_sent_embs = self.sent_emb_table(target_ids) # shape: (N_valid, d)
+            
+            # Pass targets through DPQ to dynamically get the discrete ground-truth codes!
+            # Shape: (N_valid, 32)
+            target_codes = self.dpq(target_sent_embs, tau=self.gumbel_tau)['codes']
 
-            # Flatten token axis and keep only supervised positions:
-            # final_states reshape : (B*L, H, E)
-            # after mask selection : (M, H, E)
-            # average over H heads : (M, E)
-            selected = final_states.view(
-                -1, self.n_pred_head, self.config['n_embd']
-            )[label_mask].mean(dim=1)
+            # Extract prediction states and filter valid positions
+            # final_states is (B, L, 32, E) -> selected_states is (N_valid, 32, E)
+            selected_states = final_states.view(-1, self.n_pred_head, self.config['n_embd'])[label_mask]
+            
+            # Project from E (e.g., 448) down to v_dim (e.g., 14) and normalize
+            # selected_states_v is (N_valid, 32, v_dim)
+            selected_states_v = self.head_to_v_dim(selected_states)
+            selected_states_v = F.normalize(selected_states_v, dim=-1)
 
-            # Project model states into DPQ retrieval space and L2-normalize.
-            # query: (M, dpq_out_dim)
-            query = F.normalize(self.output_proj(selected), dim=-1)  # (N_valid, dpq_out_dim)
+            # Access the V matrix! Normalize it for cosine similarity scoring
+            # V_norm shape: (32, 256, v_dim)
+            V_norm = F.normalize(self.dpq.V, dim=-1)
 
-            # Build candidate matrix from ALL item sentence embeddings:
-            # sent_emb_table.weight[1:] removes padding id 0.
-            # all_sent : (1, I, d) because DPQ expects shape (B, L, d).
-            all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
-            # item_embs after DPQ hard reconstruction: (1, I, dpq_out_dim)
-            # squeeze batch axis -> (I, dpq_out_dim), then normalize for cosine scoring
-            item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['ste']      # (1, n_items-1, dpq_out_dim)
-            item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
-            # Dense retrieval scores: (M, dpq_out_dim) @ (dpq_out_dim, I) -> (M, I)
-            item_logits = query @ item_embs.T / self.temperature             # (N_valid, n_items-1)
+            # Compute logits and cross-entropy loss for each of the 32 digits
+            losses = []
+            for i in range(self.n_pred_head):
+                # Dot product the i-th head's output with the i-th V codebook
+                # (N_valid, v_dim) @ (v_dim, 256) -> (N_valid, 256)
+                token_logits = torch.matmul(selected_states_v[:, i, :], V_norm[i].T) / self.temperature
+                
+                # Calculate loss against the dynamically generated target codes
+                loss_i = self.loss_fct(token_logits, target_codes[:, i])
+                losses.append(loss_i)
 
-            # CrossEntropy expects class ids in [0, I-1]; subtract 1 to remove padding offset.
-            # gt_ids: (M,)
-            gt_ids = batch['labels'].view(-1)[label_mask] - 1               # (N_valid,)
-            outputs.loss = nn.CrossEntropyLoss()(item_logits, gt_ids)
-
+            outputs.loss = torch.mean(torch.stack(losses))
+            
         return outputs
 
     def generate(self, batch: dict, n_return_sequences: int = 1, return_loss: bool = False):
