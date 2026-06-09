@@ -440,12 +440,12 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             label_mask = batch['labels'].view(-1) != -100
             
             # Get the ground truth item IDs and fetch their continuous embeddings
-            target_ids = batch['labels'].view(-1)[label_mask] 
-            target_sent_embs = self.sent_emb_table(target_ids) # shape: (N_valid, d)
-            
-            # Pass targets through DPQ to dynamically get the discrete ground-truth codes!
-            # Shape: (N_valid, 32)
-            target_codes = self.dpq(target_sent_embs, tau=self.gumbel_tau)['codes']
+            target_ids = batch['labels'].view(-1)[label_mask]
+            # DPQ expects (B, L, d); unsqueeze L=1 for flattened label positions
+            target_sent_embs = self.sent_emb_table(target_ids).unsqueeze(1)  # (N_valid, 1, d)
+
+            # Pass targets through DPQ to dynamically get the discrete ground-truth codes
+            target_codes = self.dpq(target_sent_embs, tau=self.gumbel_tau)['codes'].squeeze(1)  # (N_valid, D)
 
             # Extract prediction states and filter valid positions
             # final_states is (B, L, 32, E) -> selected_states is (N_valid, 32, E)
