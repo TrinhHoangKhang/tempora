@@ -537,7 +537,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             item_logits = torch.gather(
                 input=token_logits.unsqueeze(-2).expand(-1, self.dataset.n_items, -1),
                 dim=-1,
-                index=(self.item_id2tokens[1:,:] - 1).unsqueeze(0).expand(token_logits.shape, -1, -1)
+                index=(self.item_id2tokens[1:,:] - 1).unsqueeze(0).expand(token_logits.shape[0], -1, -1)
             ).mean(dim=-1)
             
             preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
