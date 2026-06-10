@@ -363,7 +363,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
                     
                 # Score neighbors using the parallel token logits!
                 scores = torch.gather(
-                    input=token_logits[batch_id].unsqueeze(0).expand(neighbors_in_batch.shape, -1),
+                    input=token_logits[batch_id].unsqueeze(0).expand(neighbors_in_batch.shape[0], -1),
                     dim=-1,
                     index=(self.item_id2tokens[neighbors_in_batch] - 1)
                 ).mean(dim=-1)
