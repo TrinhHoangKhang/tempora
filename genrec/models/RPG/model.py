@@ -98,7 +98,7 @@ class RPG(AbstractModel):
         
         # Token lookup and embedding
         input_tokens = self.item_id2tokens[batch['input_ids']]
-        input_embs = self.gpt2.wte(input_tokens).mean(dim=-2)
+        input_embs = self.gpt2.wte(input_tokens).mean(dim=-2) 
         
         # GPT-2 encoding
         outputs = self.gpt2(

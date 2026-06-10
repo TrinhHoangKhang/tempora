@@ -22,10 +22,11 @@ class DPQ(nn.Module):
         print(f"Sentence embedding dimension (d): {d}")
         print(f"Number of codebooks (D): {D}")
         print(f"Number of clusters per codebook (n_clusters): {n_clusters}")
-        print(f"Value vector dimension per subspace (v_dim): {v_dim}")
+        print(f"Sub_dim: {self.sub_dim}")
+        print(f"V_dim: {self.v_dim}")
         print(f"Info about pq_codebooks: {tokenizer.pq_codebooks.shape}")
         print(f"Info about opq_rotation: {tokenizer.opq_rotation.shape}")
-        assert False, "Stop here"
+        
         # --- Learnable linear projection R -----------------------------------
         # Unconstrained nn.Linear(d, d, bias=False): y = x @ weight^T.
         # Warm-initialised from the FAISS OPQ transform so that R and K start
@@ -133,12 +134,11 @@ class DPQ(nn.Module):
         #    ste: (B, L, D, v)
         ste = hard + soft - soft.detach()                     # (B, L, D, v_dim)
 
-        # 9) Flatten (D, v) -> (D * v) to produce GPT-facing token embeddings.
-        #    Each returned tensor has shape (B, L, D * v).
+        # 9) Mean over the D dimension to produce GPT-facing token embeddings.
         return {
-            'ste':   ste.reshape(B, L, self.D * self.v_dim),
-            'soft':  soft.reshape(B, L, self.D * self.v_dim),
-            'hard':  hard.reshape(B, L, self.D * self.v_dim),
+            'ste':   ste.mean(dim=-2),
+            'soft':  soft.mean(dim=-2),
+            'hard':  hard.mean(dim=-2),
             'codes': codes,
         }
 
@@ -242,8 +242,8 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         )
 
         # Add this to bridge the dimension gap for MTP!
-        v_dim = config.get('dpq_v_dim', config['n_embd'] // config['n_codebook'])
-        self.head_to_v_dim = nn.Linear(config['n_embd'], v_dim)
+        # v_dim = config.get('dpq_v_dim', config['n_embd'] // config['n_codebook'])
+        # self.head_to_v_dim = nn.Linear(config['n_embd'], v_dim)
         
         # ------------------------------------------------------------------
         # Item-id → 32-digit token lookup  (for loss & generate, same as RPG)
@@ -421,6 +421,11 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)     
         input_embs = self.input_proj(dpq_out['ste'])            # (B, L, n_embd)
 
+        print(f"Shape of dpq.out['ste']: {dpq_out['ste'].shape}")
+        print(f"Shape of dpq.out['soft']: {dpq_out['soft'].shape}")
+        print(f"Shape of dpq.out['hard']: {dpq_out['hard'].shape}")
+        print(f"Shape of dpq.out['codes']: {dpq_out['codes'].shape}")
+        
         # 3) GPT-2 contextual encoding.
         #    inputs_embeds          : (B, L, E)
         #    attention_mask         : (B, L) (1=keep, 0=masked)
@@ -446,96 +451,102 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             
             # Mask to filter out padding (-100)
             label_mask = batch['labels'].view(-1) != -100
+            print(f"N_valid: {label_mask.sum()}")
             
             # Get the ground truth item IDs and fetch their continuous embeddings
             target_ids = batch['labels'].view(-1)[label_mask]
-            # DPQ expects (B, L, d); unsqueeze L=1 for flattened label positions
-            target_sent_embs = self.sent_emb_table(target_ids).unsqueeze(1)  # (N_valid, 1, d)
+         
+            target_sent_embs = self.sent_emb_table(target_ids) # (N_valid d)
+            print(f"Shape of target_sent_embs: {target_sent_embs.shape}")
+        
 
             # Pass targets through DPQ to dynamically get the discrete ground-truth codes
-            target_codes = self.dpq(target_sent_embs, tau=self.gumbel_tau)['codes'].squeeze(1)  # (N_valid, D)
+            target_codes = self.dpq(target_sent_embs, tau=self.gumbel_tau)['codes']  # (N_valid, D)
+            print(f"Shape of target_codes: {target_codes.shape}")
 
             # Extract prediction states and filter valid positions
             # final_states is (B, L, 32, E) -> selected_states is (N_valid, 32, E)
             selected_states = final_states.view(-1, self.n_pred_head, self.config['n_embd'])[label_mask]
+            selected_states = F.normalize(selected_states, dim=-1)
             
-            # Project from E (e.g., 448) down to v_dim (e.g., 14) and normalize
-            # selected_states_v is (N_valid, 32, v_dim)
-            selected_states_v = self.head_to_v_dim(selected_states)
-            selected_states_v = F.normalize(selected_states_v, dim=-1)
-
             # Access the V matrix! Normalize it for cosine similarity scoring
-            # V_norm shape: (32, 256, v_dim)
+            # V_norm shape: (32, 256, 448)
             V_norm = F.normalize(self.dpq.V, dim=-1)
+            print(f"Shape of V_norm: {V_norm.shape}")
 
             # Compute logits and cross-entropy loss for each of the 32 digits
             losses = []
             for i in range(self.n_pred_head):
                 # Dot product the i-th head's output with the i-th V codebook
-                # (N_valid, v_dim) @ (v_dim, 256) -> (N_valid, 256)
-                token_logits = torch.matmul(selected_states_v[:, i, :], V_norm[i].T) / self.temperature
+                # (N_valid, 448) @ (448, 256) -> (N_valid, 256)
+                token_logits = torch.matmul(selected_states[:, i, :], V_norm[i].T) / self.temperature
                 
                 # Calculate loss against the dynamically generated target codes
                 loss_i = self.loss_fct(token_logits, target_codes[:, i])
                 losses.append(loss_i)
-
+                
             outputs.loss = torch.mean(torch.stack(losses))
             
         return outputs
 
     def generate(self, batch: dict, n_return_sequences: int = 1, return_loss: bool = False):
-        
-        # Predict next items.
-
-        # Args:
-        #     batch               : Input batch dict.
-        #     n_return_sequences  : How many top items to return.
-        #     return_loss         : If True, also return the validation loss.
-
-        # Returns:
-        #     preds               : (B, n_return_sequences, 1) item IDs
-        #     loss (optional)     : scalar tensor, only when return_loss=True
-        
+        # Forward pass
         outputs = self.forward(batch, return_loss=return_loss)
-
-        # Gather final hidden state at each sample's last valid timestep:
-        # outputs.final_states        : (B, L, H, E)
-        # (batch['seq_lens'] - 1)     : (B,) index of each sequence end
-        # gathered states             : (B, 1, H, E)
+        
+        # Extract last state for each sequence in the batch
         states = outputs.final_states.gather(
-            dim=1,
-            index=(batch['seq_lens'] - 1).view(-1, 1, 1, 1).expand(
+            dim=1, index=(batch['seq_lens'] - 1).view(-1, 1, 1, 1).expand(
                 -1, 1, self.n_pred_head, self.config['n_embd']
             ),
-        )                                                       # (B, 1, D, n_embd)
+        ) # Shape: (B, 1, 32, 448)
+        states = F.normalize(states, dim=-1)
 
-        # Mean over H heads, project to retrieval space, and normalize:
-        # states[:, 0]   : (B, H, E)
-        # mean(dim=1)    : (B, E)
-        # query          : (B, dpq_out_dim)
-        query = self.output_proj(states[:, 0].mean(dim=1))     # (B, dpq_out_dim)
-        query = F.normalize(query, dim=-1)
+        # ---------------------------------------------------------
+        # Dynamically update the semantic IDs before decoding
+        # ---------------------------------------------------------
+        with torch.no_grad():
+            all_sent = self.sent_emb_table.weight # (n_items, d)
+            all_codes = self.dpq(all_sent, tau=self.gumbel_tau)['codes'] # (n_items, 32)
+            # Add offset for concatenated token_logits indexing (0, 256, 512...)
+            offsets = torch.arange(self.n_pred_head, device=states.device) * self.dpq.n_clusters
+            # Update the global map (adding +1 to maintain 1-based indexing)
+            self.item_id2tokens = all_codes + offsets + 1 
+        
+        # ---------------------------------------------------------
+        # Generate parallel token logits
+        # ---------------------------------------------------------
+        V_norm = F.normalize(self.dpq.V, dim=-1)
+        logits = []
+        for i in range(self.n_pred_head):
+            logit = torch.matmul(states[:, 0, i, :], V_norm[i].T) / self.temperature
+            logits.append(F.log_softmax(logit, dim=-1))
+        
+        token_logits = torch.cat(logits, dim=-1) # Shape: (B, 32 * 256)
 
-        # Build and normalize candidate item embeddings in the same DPQ space.
-        # item_embs      : (I, dpq_out_dim)
-        item_embs = self._get_all_item_embs()
-        # Similarity scores over all items: (B, dpq_out_dim) @ (dpq_out_dim, I) -> (B, I)
-        item_logits = query @ item_embs.T / self.temperature             # (B, n_items-1)
-
-        # Decode with optional graph constraint (same switch semantics as RPG).
+        # ---------------------------------------------------------
+        # Decode items (Graph search or Direct Top-K)
+        # ---------------------------------------------------------
         if self.generate_w_decoding_graph:
             if not self.init_flag:
                 self.init_graph()
                 self.init_flag = True
+            
+            # The graph will now correctly use the updated self.item_id2tokens
             preds = self.graph_propagation(
-                item_logits=item_logits,
+                token_logits=token_logits, 
                 n_return_sequences=n_return_sequences,
             )
         else:
-            # topk indices are 0-based over [0, I-1], add +1 to map back to item ids.
-            preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1  # 1-based item IDs
-            preds = preds.unsqueeze(-1)                             # (B, n_return_sequences, 1)
-
+            # Direct greedy decoding against all items
+            item_logits = torch.gather(
+                input=token_logits.unsqueeze(-2).expand(-1, self.dataset.n_items, -1),
+                dim=-1,
+                index=(self.item_id2tokens[1:,:] - 1).unsqueeze(0).expand(token_logits.shape, -1, -1)
+            ).mean(dim=-1)
+            
+            preds = item_logits.topk(n_return_sequences, dim=-1).indices + 1
+            preds = preds.unsqueeze(-1)
+        
         if return_loss:
             return preds, outputs.loss
         return preds

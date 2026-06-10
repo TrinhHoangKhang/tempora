@@ -48,12 +48,8 @@ propagation_steps: 3 # Beauty
 chunk_size: 1024
 num_workers: 64
 
-# DPQ configs
-#   dpq_v_dim: Value vector dimension per subspace.
-#   Default (commented out) = n_embd // n_codebook = 448 // 32 = 14,
-#   which makes DPQ output exactly n_embd with no projection layer needed.
-#   Uncomment and change if you want a different output dimension.
-# dpq_v_dim: 14
+# Upgrade configs
+dpq_v_dim: 448 # Same as the hidden dimension of the GPT-2 model
 quantizer_temperature: 1.0
 min_quantizer_temperature: 0.5
 quantizer_temperature_decay: 1
