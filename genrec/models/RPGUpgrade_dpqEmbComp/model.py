@@ -335,7 +335,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
 
     def graph_propagation(self, token_logits: torch.Tensor, n_return_sequences: int):
         # Graph-based search constrained by k-NN graph.
-        batch_size = token_logits.shape
+        batch_size = token_logits.shape[0]
         visited_nodes = {}
         for batch_id in range(batch_size):
             visited_nodes[batch_id] = set()
