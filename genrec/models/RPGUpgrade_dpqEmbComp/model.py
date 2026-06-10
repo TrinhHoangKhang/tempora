@@ -8,7 +8,6 @@ from genrec.tokenizer import AbstractTokenizer
 
 class DPQ(nn.Module):
     # Differentiable Product Quantization.
-
     def __init__(self, d: int, D: int, n_clusters: int, v_dim: int, tokenizer):
         super().__init__()
         assert d % D == 0, f"Sentence embedding dim ({d}) must be divisible by D ({D})"
@@ -18,14 +17,6 @@ class DPQ(nn.Module):
         self.n_clusters = n_clusters
         self.sub_dim = d // D
         self.v_dim = v_dim
-
-        print(f"Sentence embedding dimension (d): {d}")
-        print(f"Number of codebooks (D): {D}")
-        print(f"Number of clusters per codebook (n_clusters): {n_clusters}")
-        print(f"Sub_dim: {self.sub_dim}")
-        print(f"V_dim: {self.v_dim}")
-        print(f"Info about pq_codebooks: {tokenizer.pq_codebooks.shape}")
-        print(f"Info about opq_rotation: {tokenizer.opq_rotation.shape}")
         
         # --- Learnable linear projection R -----------------------------------
         # Unconstrained nn.Linear(d, d, bias=False): y = x @ weight^T.
@@ -76,12 +67,6 @@ class DPQ(nn.Module):
         #     x   : (B, L, d) sentence embeddings
         #     tau : Gumbel-Softmax temperature (lower = harder assignments)
 
-        # Returns a dict with keys:
-        #     'ste'   : (B, L, D * v_dim)  STE output used for downstream layers
-        #     'soft'  : (B, L, D * v_dim)  soft reconstruction (gradient path)
-        #     'hard'  : (B, L, D * v_dim)  hard reconstruction (forward value)
-        #     'codes' : (B, L, D)          discrete code indices (long tensor)
-        
         B, L, _ = x.shape
 
         # 1) Rotate from original sentence-embedding space to PQ-aligned space.
@@ -163,7 +148,6 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
     #         and no projection layer is needed.
     #     quantizer_temperature (float): Initial Gumbel-Softmax temperature τ.
     
-
     def __init__(
         self,
         config: dict,
@@ -417,11 +401,6 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)     
         input_embs = self.input_proj(dpq_out['ste'])            # (B, L, n_embd)
 
-        print(f"Shape of dpq.out['ste']: {dpq_out['ste'].shape}")
-        print(f"Shape of dpq.out['soft']: {dpq_out['soft'].shape}")
-        print(f"Shape of dpq.out['hard']: {dpq_out['hard'].shape}")
-        print(f"Shape of dpq.out['codes']: {dpq_out['codes'].shape}")
-        
         # 3) GPT-2 contextual encoding.
         #    inputs_embeds          : (B, L, E)
         #    attention_mask         : (B, L) (1=keep, 0=masked)
