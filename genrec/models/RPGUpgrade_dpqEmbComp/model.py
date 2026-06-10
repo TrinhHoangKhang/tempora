@@ -63,26 +63,16 @@ class DPQ(nn.Module):
         #     K : number of clusters per subspace (n_clusters)
         #     v : value dimension per subspace (v_dim)
 
-        # Args:
-        #     x   : (B, L, d) sentence embeddings
-        #     tau : Gumbel-Softmax temperature (lower = harder assignments)
-
+        # Args:  x   : (B, L, d) sentence embeddings
         B, L, _ = x.shape
 
         # 1) Rotate from original sentence-embedding space to PQ-aligned space.
-        #    Input : x      (B, L, d)
-        #    Output: x_rot  (B, L, d)
         x_rot = self.rotation(x)                              # (B, L, d)
 
         # 2) Split each d-dim vector into D independent sub-vectors.
-        #    Input : x_rot  (B, L, d)
-        #    Output: x_sub  (B, L, D, sub_dim) where sub_dim = d // D
         x_sub = x_rot.view(B, L, self.D, self.sub_dim)       # (B, L, D, sub_dim)
 
         # 3) Compute assignment logits to each cluster center per subspace.
-        #    x_sub   : (B, L, D, sub_dim)
-        #    self.K  : (D, K, sub_dim)
-        #    logits  : (B, L, D, K)
         logits = torch.einsum('bldi,dki->bldk', x_sub, self.K)  # (B, L, D, n_clusters)
 
         # 4 & 5) Turn logits into soft probabilities AND hard assignments
@@ -105,13 +95,12 @@ class DPQ(nn.Module):
             soft_probs = F.softmax(logits / tau, dim=-1)
 
         # 5) Hard assignment (argmax over K clusters) for each (B, L, D) position.
-        codes = logits.argmax(dim=-1)  
+        codes = logits.argmax(dim=-1)  # (B, L, D)
         
         # 6) Hard reconstruction by gathering the selected row from value codebook V.
         # Shift codes by their subspace offsets (0, K, 2K...)
         offsets = torch.arange(self.D, device=codes.device) * self.n_clusters
         flat_codes = codes + offsets # (B, L, D)
-        
         # Flatten the V matrix and perform direct dictionary lookup
         flat_V = self.V.view(self.D * self.n_clusters, self.v_dim)
         hard = F.embedding(flat_codes, flat_V) # (B, L, D, v_dim)
@@ -120,8 +109,6 @@ class DPQ(nn.Module):
         soft = torch.einsum('bldk,dkv->bldv', soft_probs, self.V)  # (B, L, D, v_dim)
 
         # 8) Straight-Through Estimator:
-        #    forward value equals hard, backward gradient flows through soft.
-        #    ste: (B, L, D, v)
         ste = hard + soft - soft.detach()                     # (B, L, D, v_dim)
 
         # 9) Mean over the D dimension to produce GPT-facing token embeddings.
@@ -149,14 +136,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
 
     # Compared to RPG the only change is in how input embeddings are produced:
     #     RPG       : item_ids → item2tokens (frozen) → GPT-2 wte → mean-pool → GPT-2
-    #     RPGUpgrade: item_ids → frozen sent_emb_table → DPQ (learnable) → proj → GPT-2
-
-    # Config keys specific to RPGUpgrade:
-    #     dpq_v_dim (int, optional): Value vector dimension per subspace.
-    #         Defaults to n_embd // n_codebook, so DPQ output = n_embd directly
-    #         and no projection layer is needed.
-    #     quantizer_temperature (float): Initial Gumbel-Softmax temperature τ.
-    
+    #     RPGUpgrade: item_ids → frozen sent_emb_table → DPQ (learnable) → proj → GPT-2    
     def __init__(
         self,
         config: dict,
@@ -165,12 +145,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
     ):
         super().__init__(config, dataset, tokenizer)
         print(f'[MODEL] Initializing RPGUpgrade model...')
-        # ------------------------------------------------------------------
-        # Sentence embedding table  (item_id → sent_emb)
-        # TOGGLE: set freeze=True to lock embeddings (original behaviour),
-        #         set freeze=False to allow fine-tuning during training.
-        # ------------------------------------------------------------------
-        FREEZE_SENT_EMB = True   # ← change this line to switch behaviour
+        FREEZE_SENT_EMB = True  
         sent_embs_tensor = torch.from_numpy(tokenizer.sent_embs)   # (n_items, d)
         self.sent_emb_table = nn.Embedding.from_pretrained(
             sent_embs_tensor, freeze=FREEZE_SENT_EMB, padding_idx=0
@@ -432,22 +407,16 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         # 5. Loss
         if return_loss:
             assert 'labels' in batch, 'Batch must contain labels.'
-            
             # Mask to filter out padding (-100)
             label_mask = batch['labels'].view(-1) != -100
-            print(f"N_valid: {label_mask.sum()}")
             
             # Get the ground truth item IDs and fetch their continuous embeddings
             target_ids = batch['labels'].view(-1)[label_mask]
-         
             target_sent_embs = self.sent_emb_table(target_ids) # (N_valid d)
-            print(f"Shape of target_sent_embs: {target_sent_embs.shape}")
-        
 
             # Pass targets through DPQ to dynamically get the discrete ground-truth codes
             target_codes = self.dpq(target_sent_embs.unsqueeze(1), tau=self.gumbel_tau)['codes'].squeeze(1) 
-            print(f"Shape of target_codes: {target_codes.shape}")
-
+        
             # Extract prediction states and filter valid positions
             # final_states is (B, L, 32, E) -> selected_states is (N_valid, 32, E)
             selected_states = final_states.view(-1, self.n_pred_head, self.config['n_embd'])[label_mask]
@@ -456,7 +425,6 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             # Access the V matrix! Normalize it for cosine similarity scoring
             # V_norm shape: (32, 256, 448)
             V_norm = F.normalize(self.dpq.V, dim=-1)
-            print(f"Shape of V_norm: {V_norm.shape}")
 
             # Compute logits and cross-entropy loss for each of the 32 digits
             losses = []
