@@ -54,7 +54,7 @@ class DPQ(nn.Module):
             V_init = torch.randn(D, n_clusters, v_dim) * 0.02
         self.V = nn.Parameter(V_init)
 
-    def forward(self, x: torch.Tensor, tau: float = 1.0) -> dict:
+    def forward(self, x: torch.Tensor, tau: float = 1.0, sigma: float = 1.0) -> dict:
         
         # Notation used below:
         #     B : batch size
@@ -97,12 +97,11 @@ class DPQ(nn.Module):
         #    - eval : deterministic softmax
         #    soft_probs: (B, L, D, K), each last-dim slice sums to 1
         if self.training:
-            gumbel = -torch.log(
-                -torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10
-            )
-            soft_probs = F.softmax((logits + gumbel) / tau, dim=-1)
+            gumbel = -torch.log( -torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10 )
+            # SCALE the gumbel noise by sigma
+            soft_probs = F.softmax((logits + sigma * gumbel) / tau, dim=-1)
         else:
-            soft_probs = F.softmax(logits / tau, dim=-1)      # (B, L, D, n_clusters)
+            soft_probs = F.softmax(logits / tau, dim=-1)
 
         # 5) Hard assignment (argmax over K clusters) for each (B, L, D) position.
         #    codes: (B, L, D), dtype long, no gradient through argmax.
@@ -256,6 +255,9 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         self.gumbel_tau: float = config.get('quantizer_temperature', 1.0)
         self.gumbel_tau_min: float = config.get('min_quantizer_temperature', 0.1)
         self.gumbel_tau_decay: float = config.get('quantizer_temperature_decay', 0.9)
+        
+        self.sdud_lambda = config.get('sdud_lambda', 1.4)
+        self.sigma = 1.0 
 
     def anneal_tau(self):
         # Exponential decay with floor: tau <- max(tau_min, tau * tau_decay).
@@ -408,7 +410,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         # 2) Differentiable quantization + optional dimension projection.
         #    dpq_out['ste']: (B, L, dpq_out_dim)
         #    input_embs    : (B, L, E) after self.input_proj
-        dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)     
+        dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau, sigma=self.sigma)     
         input_embs = self.input_proj(dpq_out['ste'])            # (B, L, n_embd)
 
         # 3) GPT-2 contextual encoding.
@@ -456,7 +458,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
             # item_embs after DPQ hard reconstruction: (1, I, dpq_out_dim)
             # squeeze batch axis -> (I, dpq_out_dim), then normalize for cosine scoring
-            item_embs = self.dpq(all_sent, tau=self.gumbel_tau)['hard']      # (1, n_items-1, dpq_out_dim)
+            item_embs = self.dpq(all_sent, tau=self.gumbel_tau, sigma=self.sigma)['hard']      # (1, n_items-1, dpq_out_dim)
             item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
             # Dense retrieval scores: (M, dpq_out_dim) @ (dpq_out_dim, I) -> (M, I)
             item_logits = query @ item_embs.T / self.temperature             # (N_valid, n_items-1)
@@ -464,8 +466,14 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             # CrossEntropy expects class ids in [0, I-1]; subtract 1 to remove padding offset.
             # gt_ids: (M,)
             gt_ids = batch['labels'].view(-1)[label_mask] - 1               # (N_valid,)
-            outputs.loss = nn.CrossEntropyLoss()(item_logits, gt_ids)
-
+            
+            l_gen = nn.CrossEntropyLoss()(item_logits, gt_ids)
+            if self.training:
+                # Update sigma using the SDUD closed-form equilibrium: max(0, sqrt(L_gen) - lambda)
+                self.sigma = max(0.0, (l_gen.item() ** 0.5) - self.sdud_lambda)
+            
+            outputs.loss = l_gen
+           
         return outputs
 
     def generate(self, batch: dict, n_return_sequences: int = 1, return_loss: bool = False):

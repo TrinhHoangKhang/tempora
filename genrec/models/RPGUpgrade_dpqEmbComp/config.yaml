@@ -58,5 +58,7 @@ quantizer_temperature: 1.0
 min_quantizer_temperature: 0.5
 quantizer_temperature_decay: 1
 
+sdud_lambda: 1.4
+
 # DEBUG configs
 tokenizer_debug_n_examples: 0
