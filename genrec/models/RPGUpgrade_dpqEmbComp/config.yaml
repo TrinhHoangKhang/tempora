@@ -50,7 +50,7 @@ num_workers: 64
 
 # Upgrade configs
 dpq_v_dim: 448 # Same as the hidden dimension of the GPT-2 model
-quantizer_temperature: 1.0
+quantizer_temperature: 1.0 # should be 2.0
 min_quantizer_temperature: 0.5
 quantizer_temperature_decay: 1
 

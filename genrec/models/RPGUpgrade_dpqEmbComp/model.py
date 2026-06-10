@@ -220,7 +220,8 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         
          # SDUD Parameters
         self.sigma = 1.0  # Initial noise scale
-        self.lambda_val = 1.2  # The paper recommends tuning between 1.0 and 2.0
+        self.lambda_val = 2.0  # The paper recommends tuning between 1.0 and 2.0
+        self.running_loss = None
 
     def anneal_tau(self):
         # Exponential decay with floor: tau <- max(tau_min, tau * tau_decay).
@@ -433,8 +434,18 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             # --- Uncertainty Decay (SDUD) ---
             # Automatically scale the noise for the next batch based on current loss!
             if self.training:
-                current_loss = outputs.loss.detach()
-                self.sigma = max(0.0, torch.sqrt(current_loss).item() - self.lambda_val)
+                current_loss = outputs.loss.detach().item()
+                
+                # Smooth the loss using EMA (99% old history, 1% new batch)
+                if self.running_loss is None:
+                    self.running_loss = current_loss
+                else:
+                    self.running_loss = 0.99 * self.running_loss + 0.01 * current_loss
+                
+                # Calculate sigma using the smoothed loss
+                import math
+                self.sigma = max(0.0, math.sqrt(self.running_loss) - self.lambda_val)
+
             
         return outputs
 
