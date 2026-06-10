@@ -19,6 +19,10 @@ class DPQ(nn.Module):
         self.sub_dim = d // D
         self.v_dim = v_dim
 
+        print(f"Sentence embedding dimension (d): {d}")
+        print(f"Number of codebooks (D): {D}")
+        print(f"Number of clusters per codebook (n_clusters): {n_clusters}")
+        print(f"Value vector dimension per subspace (v_dim): {v_dim}")
         # --- Learnable linear projection R -----------------------------------
         # Unconstrained nn.Linear(d, d, bias=False): y = x @ weight^T.
         # Warm-initialised from the FAISS OPQ transform so that R and K start
@@ -185,6 +189,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         # Differentiable PQ module
         # ------------------------------------------------------------------
         v_dim = config.get('dpq_v_dim', config['n_embd'] // config['n_codebook'])
+        print(f"v_dim is calculated by dpq_v_dim config or n_embd // n_codebook: {v_dim}")
         self.dpq = DPQ(
             d=self.sent_emb_dim,
             D=config['n_codebook'],
