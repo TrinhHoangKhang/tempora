@@ -114,16 +114,15 @@ class DPQ(nn.Module):
 
 
         # 6) Hard reconstruction by gathering the selected row from value codebook V.
-        #    self.V : (D, K, v)
-        #    V_exp  : (B, L, D, K, v)  (broadcast view for gather)
-        #    idx    : (B, L, D, 1, v)  (indices expanded along value dim)
-        #    hard   : (B, L, D, v)
-        V_exp = self.V.unsqueeze(0).unsqueeze(0).expand(B, L, -1, -1, -1)
-        idx = codes.unsqueeze(-1).unsqueeze(-1).expand(B, L, self.D, 1, self.v_dim)
-        hard = V_exp.gather(dim=3, index=idx).squeeze(3)     # (B, L, D, v_dim)
-
+        # Shift codes by their subspace offsets (0, K, 2K...)
+        offsets = torch.arange(self.D, device=codes.device) * self.n_clusters
+        flat_codes = codes + offsets # (B, L, D)
+        
+        # Flatten the V matrix and perform direct dictionary lookup
+        flat_V = self.V.view(self.D * self.n_clusters, self.v_dim)
+        hard = F.embedding(flat_codes, flat_V) # (B, L, D, v_dim)
+        
         # 7) Soft reconstruction using weighted average of all K codewords.
-        #    soft_probs: (B, L, D, K), self.V: (D, K, v) -> soft: (B, L, D, v)
         soft = torch.einsum('bldk,dkv->bldv', soft_probs, self.V)  # (B, L, D, v_dim)
 
         # 8) Straight-Through Estimator:
