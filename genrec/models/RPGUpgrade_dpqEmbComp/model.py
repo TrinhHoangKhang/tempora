@@ -53,7 +53,7 @@ class DPQ(nn.Module):
             V_init = torch.randn(D, n_clusters, v_dim) * 0.02
         self.V = nn.Parameter(V_init)
 
-    def forward(self, x: torch.Tensor, tau: float = 1.0) -> dict:
+    def forward(self, x: torch.Tensor, tau: float = 1.0, sigma: float = 1.0) -> dict:
         
         # Notation used below:
         #     B : batch size
@@ -75,27 +75,18 @@ class DPQ(nn.Module):
         # 3) Compute assignment logits to each cluster center per subspace.
         logits = torch.einsum('bldi,dki->bldk', x_sub, self.K)  # (B, L, D, n_clusters)
 
-        #4 & 5) Turn logits into soft probabilities AND hard assignments
+        # 4 & 5) Turn logits into soft probabilities AND hard assignments
         if self.training:
-            gumbel = -torch.log(-torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10)
-            noisy_logits = logits + gumbel
+            raw_gumbel = -torch.log(-torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10)
             
-            # Gumbel affects both soft backward gradients AND hard forward exploration!
+            # Scale the Gumbel noise by the uncertainty standard deviation (SDUD)
+            noisy_logits = logits + (sigma * raw_gumbel)
+            
             soft_probs = F.softmax(noisy_logits / tau, dim=-1)
             codes = noisy_logits.argmax(dim=-1)
         else:
             soft_probs = F.softmax(logits / tau, dim=-1)
             codes = logits.argmax(dim=-1)
-
-        # # 4) Turn logits into soft assignment probabilities.
-        # if self.training:
-        #     gumbel = -torch.log(-torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10)
-        #     soft_probs = F.softmax((logits + gumbel) / tau, dim=-1)
-        # else:
-        #     soft_probs = F.softmax(logits / tau, dim=-1)
-
-        # # 5) Hard assignment (argmax over K clusters) for each (B, L, D) position.
-        # codes = logits.argmax(dim=-1)  # (B, L, D)
         
         # 6) Hard reconstruction by gathering the selected row from value codebook V.
         # Shift codes by their subspace offsets (0, K, 2K...)
@@ -204,10 +195,6 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         self.pred_heads = nn.Sequential(
             *[ResBlock(config['n_embd']) for _ in range(self.n_pred_head)]
         )
-
-        # Add this to bridge the dimension gap for MTP!
-        # v_dim = config.get('dpq_v_dim', config['n_embd'] // config['n_codebook'])
-        # self.head_to_v_dim = nn.Linear(config['n_embd'], v_dim)
         
         # ------------------------------------------------------------------
         # Item-id → 32-digit token lookup  (for loss & generate, same as RPG)
@@ -226,10 +213,14 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         self.n_edges = config['n_edges']
         self.propagation_steps = config['propagation_steps']
 
-        # Gumbel temperature – annealed each epoch via anneal_tau()
+        # Gumbel temperature 
         self.gumbel_tau: float = config.get('quantizer_temperature', 1.0)
         self.gumbel_tau_min: float = config.get('min_quantizer_temperature', 0.1)
         self.gumbel_tau_decay: float = config.get('quantizer_temperature_decay', 0.9)
+        
+         # SDUD Parameters
+        self.sigma = 1.0  # Initial noise scale
+        self.lambda_val = 1.2  # The paper recommends tuning between 1.0 and 2.0
 
     def anneal_tau(self):
         # Exponential decay with floor: tau <- max(tau_min, tau * tau_decay).
@@ -382,7 +373,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         # 2) Differentiable quantization + optional dimension projection.
         #    dpq_out['ste']: (B, L, dpq_out_dim)
         #    input_embs    : (B, L, E) after self.input_proj
-        dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau)     
+        dpq_out = self.dpq(sent_embs, tau=self.gumbel_tau, sigma=self.sigma)     
         input_embs = self.input_proj(dpq_out['ste'])            # (B, L, n_embd)
 
         # 3) GPT-2 contextual encoding.
@@ -415,7 +406,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             target_sent_embs = self.sent_emb_table(target_ids) # (N_valid d)
 
             # Pass targets through DPQ to dynamically get the discrete ground-truth codes
-            target_codes = self.dpq(target_sent_embs.unsqueeze(1), tau=self.gumbel_tau)['codes'].squeeze(1) 
+            target_codes = self.dpq(target_sent_embs.unsqueeze(1), tau=self.gumbel_tau, sigma=self.sigma)['codes'].squeeze(1) 
         
             # Extract prediction states and filter valid positions
             # final_states is (B, L, 32, E) -> selected_states is (N_valid, 32, E)
@@ -438,6 +429,12 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
                 losses.append(loss_i)
                 
             outputs.loss = torch.mean(torch.stack(losses))
+            
+            # --- Uncertainty Decay (SDUD) ---
+            # Automatically scale the noise for the next batch based on current loss!
+            if self.training:
+                current_loss = outputs.loss.detach()
+                self.sigma = max(0.0, torch.sqrt(current_loss).item() - self.lambda_val)
             
         return outputs
 
