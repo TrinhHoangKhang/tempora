@@ -86,18 +86,27 @@ class DPQ(nn.Module):
         logits = torch.einsum('bldi,dki->bldk', x_sub, self.K)  # (B, L, D, n_clusters)
 
         # 4 & 5) Turn logits into soft probabilities AND hard assignments
+        # if self.training:
+        #     gumbel = -torch.log(-torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10)
+        #     noisy_logits = logits + gumbel
+            
+        #     # Gumbel affects both soft backward gradients AND hard forward exploration!
+        #     soft_probs = F.softmax(noisy_logits / tau, dim=-1)
+        #     codes = noisy_logits.argmax(dim=-1)
+        # else:
+        #     soft_probs = F.softmax(logits / tau, dim=-1)
+        #     codes = logits.argmax(dim=-1)
+
+        # 4) Turn logits into soft assignment probabilities.
         if self.training:
             gumbel = -torch.log(-torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10)
-            noisy_logits = logits + gumbel
-            
-            # Gumbel affects both soft backward gradients AND hard forward exploration!
-            soft_probs = F.softmax(noisy_logits / tau, dim=-1)
-            codes = noisy_logits.argmax(dim=-1)
+            soft_probs = F.softmax((logits + gumbel) / tau, dim=-1)
         else:
             soft_probs = F.softmax(logits / tau, dim=-1)
-            codes = logits.argmax(dim=-1)
 
-
+        # 5) Hard assignment (argmax over K clusters) for each (B, L, D) position.
+        codes = logits.argmax(dim=-1)  
+        
         # 6) Hard reconstruction by gathering the selected row from value codebook V.
         # Shift codes by their subspace offsets (0, K, 2K...)
         offsets = torch.arange(self.D, device=codes.device) * self.n_clusters
