@@ -458,7 +458,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         
 
             # Pass targets through DPQ to dynamically get the discrete ground-truth codes
-            target_codes = self.dpq(target_sent_embs, tau=self.gumbel_tau)['codes']  # (N_valid, D)
+            target_codes = self.dpq(target_sent_embs.unsqueeze(1), tau=self.gumbel_tau)['codes'].squeeze(1) 
             print(f"Shape of target_codes: {target_codes.shape}")
 
             # Extract prediction states and filter valid positions
@@ -503,7 +503,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         # ---------------------------------------------------------
         with torch.no_grad():
             all_sent = self.sent_emb_table.weight # (n_items, d)
-            all_codes = self.dpq(all_sent, tau=self.gumbel_tau)['codes'] # (n_items, 32)
+            all_codes = self.dpq(all_sent.unsqueeze(0), tau=self.gumbel_tau)['codes'].squeeze(0) # (n_items, 32)
             # Add offset for concatenated token_logits indexing (0, 256, 512...)
             offsets = torch.arange(self.n_pred_head, device=states.device) * self.dpq.n_clusters
             # Update the global map (adding +1 to maintain 1-based indexing)
