@@ -109,11 +109,14 @@ class AbstractDataset:
             self.log(f'[DATASET] Using all {len(users)} users for split')
 
         for user in users:
-            datasets['test']['user'].append(user)
-            datasets['test']['item_seq'].append(self.all_item_seqs[user])
+            # Swapped val/test to diagnose the val-good/test-poor gap:
+            #   val  → full sequence          → target = i_n   (last item, used for model selection)
+            #   test → sequence minus last    → target = i_{n-1} (second-to-last, used for final report)
+            datasets['val']['user'].append(user)
+            datasets['val']['item_seq'].append(self.all_item_seqs[user])
             if len(self.all_item_seqs[user]) > 1:
-                datasets['val']['user'].append(user)
-                datasets['val']['item_seq'].append(self.all_item_seqs[user][:-1])
+                datasets['test']['user'].append(user)
+                datasets['test']['item_seq'].append(self.all_item_seqs[user][:-1])
             if len(self.all_item_seqs[user]) > 2:
                 datasets['train']['user'].append(user)
                 datasets['train']['item_seq'].append(self.all_item_seqs[user][:-2])
