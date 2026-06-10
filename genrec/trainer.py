@@ -149,12 +149,18 @@ class Trainer:
             model_for_anneal = self.accelerator.unwrap_model(self.model) if self.config.get('use_ddp') else self.model
             if hasattr(model_for_anneal, 'anneal_tau'):
                 model_for_anneal.anneal_tau()
-                self.log(f'[Epoch {epoch + 1}] Gumbel τ → {model_for_anneal.gumbel_tau:.4f}')
+                self.log(f'[Epoch {epoch + 1}] Gumbel tau → {model_for_anneal.gumbel_tau:.4f}')
             if hasattr(model_for_anneal, 'gumbel_tau'):
                 self.accelerator.log(
                     {"Quantizer/gumbel_tau": float(model_for_anneal.gumbel_tau)},
                     step=epoch + 1
                 )
+            if hasattr(model_for_anneal, 'sigma'):
+                self.accelerator.log(
+                    {"Quantizer/sigma": float(model_for_anneal.sigma)},
+                    step=epoch + 1,
+                )
+                self.log(f'[Epoch {epoch + 1}] Gumbel sigma → {model_for_anneal.sigma:.4f}')
 
             # ===== Validation Phase =====
             self.log(f'[TRAINER] ======================= VALIDATION ========================')
