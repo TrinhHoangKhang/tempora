@@ -200,7 +200,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             v_dim=v_dim,
             tokenizer=tokenizer,
         )
-        dpq_out_dim = config['n_codebook'] * v_dim  # = n_embd when using default
+        dpq_out_dim = v_dim 
 
         # Optional projection if DPQ output dim ≠ GPT-2 hidden dim
         if dpq_out_dim != config['n_embd']:
@@ -337,48 +337,48 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         self.adjacency = self.build_adjacency_list(item_item_sim)
         self.tokenizer.log("Graph initialized.")
 
-    def graph_propagation(self, item_logits: torch.Tensor, n_return_sequences: int):
-        
-        # Graph-based decoding in item space.
-
-        # Args:
-        #     item_logits: (B, n_items-1), scores for item ids 1..n_items-1
-        #     n_return_sequences: number of final candidates to return
-        
-        batch_size = item_logits.shape[0]
-        visited_nodes = {batch_id: set() for batch_id in range(batch_size)}
-
-        # Random beam initialization in valid item-id range [1, n_items-1].
-        topk_nodes_sorted = torch.randint(
-            1, self.dataset.n_items,
-            (batch_size, self.num_beams),
-            dtype=torch.long,
-            device=item_logits.device,
-        )
-
+    def graph_propagation(self, token_logits: torch.Tensor, n_return_sequences: int):
+        # Graph-based search constrained by k-NN graph.
+        batch_size = token_logits.shape
+        visited_nodes = {}
         for batch_id in range(batch_size):
-            for node in topk_nodes_sorted[batch_id].detach().cpu().tolist():
-                visited_nodes[batch_id].add(node)
+            visited_nodes[batch_id] = set()
 
-        # Iterative expansion + local reranking with DPQ item logits.
-        for _ in range(self.propagation_steps):
+        # Random initialization
+        topk_nodes_sorted = torch.randint(
+            1, self.dataset.n_items, (batch_size, self.num_beams), 
+            dtype=torch.long, device=token_logits.device
+        )
+        
+        # Track initial items as visited
+        for batch_id in range(batch_size):
+            for node in topk_nodes_sorted[batch_id].cpu().numpy().tolist():
+                visited_nodes[batch_id].add(node)
+                
+        # Iterative graph traversal
+        for sid in range(self.propagation_steps):
             all_neighbors = self.adjacency[topk_nodes_sorted].view(batch_size, -1)
             next_nodes = []
+            
             for batch_id in range(batch_size):
                 neighbors_in_batch = torch.unique(all_neighbors[batch_id])
-                for node in neighbors_in_batch.detach().cpu().tolist():
+                for node in neighbors_in_batch.cpu().numpy().tolist():
                     visited_nodes[batch_id].add(node)
-
-                # item_logits columns are 0-based for item ids 1..n_items-1.
-                scores = item_logits[batch_id].index_select(0, neighbors_in_batch - 1)
+                    
+                # Score neighbors using the parallel token logits!
+                scores = torch.gather(
+                    input=token_logits[batch_id].unsqueeze(0).expand(neighbors_in_batch.shape, -1),
+                    dim=-1,
+                    index=(self.item_id2tokens[neighbors_in_batch] - 1)
+                ).mean(dim=-1)
+                
+                # Select top candidates
                 idxs = torch.topk(scores, self.num_beams).indices
                 next_nodes.append(neighbors_in_batch[idxs])
-
+                
             topk_nodes_sorted = torch.stack(next_nodes, dim=0)
-
-        visited_counts = torch.FloatTensor(
-            [[len(visited_nodes[batch_id])] for batch_id in range(batch_size)]
-        )
+            
+        visited_counts = torch.FloatTensor([[len(visited_nodes[batch_id])] for batch_id in range(batch_size)])
         return topk_nodes_sorted[:, :n_return_sequences].unsqueeze(-1), visited_counts
 
     @property
@@ -442,7 +442,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             [self.pred_heads[i](outputs.last_hidden_state).unsqueeze(-2)
              for i in range(self.n_pred_head)],
             dim=-2,
-        )                                                       # (B, L, D, n_embd)
+        )                                                       # (B, L, D, n_e mbd)
         outputs.final_states = final_states
 
         # 5. Loss
