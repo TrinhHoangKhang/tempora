@@ -25,6 +25,7 @@ class DPQ(nn.Module):
         print(f"Value vector dimension per subspace (v_dim): {v_dim}")
         print(f"Info about pq_codebooks: {tokenizer.pq_codebooks.shape}")
         print(f"Info about opq_rotation: {tokenizer.opq_rotation.shape}")
+        assert False, "Stop here"
         # --- Learnable linear projection R -----------------------------------
         # Unconstrained nn.Linear(d, d, bias=False): y = x @ weight^T.
         # Warm-initialised from the FAISS OPQ transform so that R and K start
