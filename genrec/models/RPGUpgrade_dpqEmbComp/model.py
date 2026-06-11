@@ -459,7 +459,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             all_sent = self.sent_emb_table.weight[1:].unsqueeze(0)           # (1, n_items-1, d)
             # item_embs after DPQ hard reconstruction: (1, I, dpq_out_dim)
             # squeeze batch axis -> (I, dpq_out_dim), then normalize for cosine scoring
-            item_embs = self.dpq(all_sent, tau=self.gumbel_tau, sigma=self.sigma)['hard']      # (1, n_items-1, dpq_out_dim)
+            item_embs = self.dpq(all_sent, tau=self.gumbel_tau, sigma=self.sigma)['ste']      # (1, n_items-1, dpq_out_dim)
             item_embs = F.normalize(item_embs.squeeze(0), dim=-1)            # (n_items-1, dpq_out_dim)
             # Dense retrieval scores: (M, dpq_out_dim) @ (dpq_out_dim, I) -> (M, I)
             item_logits = query @ item_embs.T / self.temperature             # (N_valid, n_items-1)
