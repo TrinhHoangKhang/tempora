@@ -92,21 +92,21 @@ class DPQ(nn.Module):
         #    logits  : (B, L, D, K)
         logits = torch.einsum('bldi,dki->bldk', x_sub, self.K)  # (B, L, D, n_clusters)
 
-        # 4) Turn logits into soft assignment probabilities.
-        #    - train: add Gumbel noise for differentiable categorical sampling
-        #    - eval : deterministic softmax
-        #    soft_probs: (B, L, D, K), each last-dim slice sums to 1
+        # 4 & 5) Turn logits into soft probabilities AND hard assignments.
         if self.training:
             gumbel = -torch.log( -torch.log(torch.rand_like(logits).clamp(min=1e-10)) + 1e-10 )
-            # SCALE the gumbel noise by sigma
-            soft_probs = F.softmax((logits + sigma * gumbel) / tau, dim=-1)
+            
+            # SCALE the gumbel noise by sigma and apply it to the logits
+            noisy_logits = logits + (sigma * gumbel)
+            
+            soft_probs = F.softmax(noisy_logits / tau, dim=-1)
+            # FIX: Argmax over the NOISY logits to ensure exploration in the forward pass
+            codes = noisy_logits.argmax(dim=-1) 
         else:
             soft_probs = F.softmax(logits / tau, dim=-1)
-
-        # 5) Hard assignment (argmax over K clusters) for each (B, L, D) position.
-        #    codes: (B, L, D), dtype long, no gradient through argmax.
-        codes = logits.argmax(dim=-1)                         # (B, L, D)
-
+            # Deterministic argmax for evaluation
+            codes = logits.argmax(dim=-1) 
+            
         # 6) Hard reconstruction by gathering the selected row from value codebook V.
         #    self.V : (D, K, v)
         #    V_exp  : (B, L, D, K, v)  (broadcast view for gather)
@@ -258,6 +258,7 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
         
         self.sdud_lambda = config.get('sdud_lambda', 1.4)
         self.sigma = 1.0 
+        self.running_loss = None
 
     def anneal_tau(self):
         # Exponential decay with floor: tau <- max(tau_min, tau * tau_decay).
@@ -469,8 +470,16 @@ class RPGUpgrade_dpqEmbComp(AbstractModel):
             
             l_gen = nn.CrossEntropyLoss()(item_logits, gt_ids)
             if self.training:
-                # Update sigma using the SDUD closed-form equilibrium: max(0, sqrt(L_gen) - lambda)
-                self.sigma = max(0.0, (l_gen.item() ** 0.5) - self.sdud_lambda)
+                current_loss = l_gen.item()
+                
+                # Smooth the loss using EMA (99% old history, 1% new batch)
+                if self.running_loss is None:
+                    self.running_loss = current_loss
+                else:
+                    self.running_loss = 0.99 * self.running_loss + 0.01 * current_loss
+                    
+                # Update sigma using the smoothed loss equilibrium: max(0, sqrt(EMA_L_gen) - lambda)
+                self.sigma = max(0.0, (self.running_loss ** 0.5) - self.sdud_lambda)
             
             outputs.loss = l_gen
            
